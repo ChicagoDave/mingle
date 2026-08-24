@@ -2,7 +2,7 @@
 
 **Created**: 2026-08-21
 **Plan Status**: ACTIVE
-**Overall scope**: Rebuild the complete original Mingle product (`mingle/`, plus the programs/plans/objectives features from `mingle-rails5/`) as `mingle-ts/` — React Router 7 (framework mode, SSR), Postgres + Drizzle, Node 22, pg-boss — with no feature area deferred indefinitely. Single-tenant (the on-prem edition is the parity target, not SaaS multitenancy). Feature inventory verified against `mingle/app/controllers`, `mingle/app/models`, `mingle/config/routes.rb`, `mingle/help/topics`, and `mingle-rails5/app/{controllers,models}`.
+**Overall scope**: Rebuild the complete original Mingle product (`mingle/`, plus the programs/plans/objectives features from `mingle-rails5/`) as `mingle-ts/` — React Router (framework mode, SSR; v8 as scaffolded), SQLite + Drizzle (ADR-0002 — superseded the original Postgres + pg-boss choice on 2026-08-24; background jobs become a SQLite-backed jobs table with an in-process worker), Node 22 — with no feature area deferred indefinitely. Single-tenant (the on-prem edition is the parity target, not SaaS multitenancy). Feature inventory verified against `mingle/app/controllers`, `mingle/app/models`, `mingle/config/routes.rb`, `mingle/help/topics`, and `mingle-rails5/app/{controllers,models}`.
 **Bounded contexts touched**: Card Management (Project, Card, CardType, PropertyDefinition, CardVersion), Identity & Access (User, Team, Group, Role, Auth), Workflow (Transition, TransitionWorkflow), Query (MQL), Wiki & Content (Page, Macro), Charting/Reporting, Collaboration (Murmur, HistoryFeed, Notification), Card Trees (TreeConfiguration, TreeRelationshipProperty, AggregateProperty), Cross-Project Dependencies, Program Management (Program, Plan, Objective, Backlog — kept as its own context, mirroring `mingle-rails5`'s original separation from core Card Management rather than merging it), Import/Export, Public API, External Integrations.
 **Key domain language**: Project, Card, CardType, PropertyDefinition (Text | Number | Date | User | Enumerated | Formula | Aggregate), CardVersion, Transition, Murmur, Page, CardTree, TreeRelationshipProperty, Dependency, Program, Plan, Objective, MQL (Mingle Query Language), Macro.
 
@@ -21,7 +21,7 @@
 - **Entry state**: `mingle-ts/` does not exist; `mingle/` and `mingle-rails5/` remain untouched read-only reference material.
 - **Deliverable**: `mingle-ts/` React Router 7 (framework mode, SSR) skeleton on Node 22 LTS, TypeScript strict; Drizzle ORM wired to Postgres; `pg-boss` installed; one shared wire-types module (e.g. `mingle-ts/app/shared/wire-types.ts`) as the single client/server import point per rule 8b, with no runtime-specific types in it; `docker-compose.yml` with an `app` and a `db` (Postgres) service for local dev; a `/healthz` route that opens a real connection to `db`.
 - **Exit state**: `docker compose up` boots both services; a real-path test (rule 13a — this phase's name and content are database/docker-shaped) hits `/healthz` against the live `db` container and asserts a real round-trip, not a stub.
-- **Status**: DONE (2026-08-24) — exit criteria met: compose stack boots (db healthy → app), real-path test passed 1/1 against live Postgres, degraded path (503 on db stop, 200 on recovery) verified. Note: scaffold landed on React Router v8 (current major of the framework-mode architecture ADR-0001 named as v7); Node 22 pinned in the Dockerfile, local dev runs Node 24.
+- **Status**: DONE (2026-08-24) — exit criteria met: compose stack boots (db healthy → app), real-path test passed 1/1 against live Postgres, degraded path (503 on db stop, 200 on recovery) verified. Note: scaffold landed on React Router v8 (current major of the framework-mode architecture ADR-0001 named as v7); Node 22 pinned in the Dockerfile, local dev runs Node 24. **Reworked same day under ADR-0002**: Postgres/pg-boss replaced by SQLite (better-sqlite3, WAL, startup migrations); compose collapsed to a single `app` service with a `/data` volume; healthz and the real-path test re-verified against the file-backed database (HTTP 200 / 1 passed).
 
 ### Phase 2: Identity & Access — users, authentication, profile
 - **Tier**: Medium
@@ -30,7 +30,7 @@
 - **Entry state**: Phase 1 scaffold boots against real Postgres.
 - **Deliverable**: `users` schema + migrations; login/logout routes and session handling (cookie-based, server-verified against a hashed password column — mirroring `login_access.rb`/`password_encryption.rb`'s intent, not their code); a profile settings route (display name, email, password change); domain events `UserRegistered`, `UserLoggedIn`, `UserProfileUpdated`, `PasswordChanged`.
 - **Exit state**: a behavioral test suite (rule 12/13) registers a user, logs in, changes profile fields, and reloads the DB to assert the persisted row — plus a rejection test for a bad password. No project or card concepts required yet.
-- **Status**: CURRENT (since 2026-08-24)
+- **Status**: DONE (2026-08-24) — 23 behavioral tests passing against a real file-backed SQLite database (register/login/profile/password, all DOES lines asserted on reloaded rows, all REJECTS WHEN lines covered including the mutation-verification agent's three flagged gaps); first-user-is-admin install parity; domain_events table established (UserRegistered/UserLoggedIn/UserProfileUpdated/PasswordChanged); cookie sessions with a zero-config persistent secret beside the DB file; end-to-end register→profile verified over HTTP against the rebuilt container (which also proved startup migrations in the image — a missing drizzle/ folder in the runtime stage was caught and fixed to fail loudly). Built on SQLite per ADR-0002.
 
 ## Milestone 2: Projects & Team
 
@@ -41,7 +41,7 @@
 - **Entry state**: Phase 2 auth exists; an authenticated user can act.
 - **Deliverable**: `projects` and `project_variables` schema/migrations; create/configure/settings routes for a project (name, identifier, description); command handlers `CreateProject`, `UpdateProjectSettings`, `DefineProjectVariable` each producing `ProjectCreated`/`ProjectSettingsUpdated`/`ProjectVariableDefined` or rejecting.
 - **Exit state**: a logged-in user creates a project, edits its settings, and defines a project variable; tests assert on the persisted `projects`/`project_variables` rows.
-- **Status**: PENDING
+- **Status**: CURRENT (since 2026-08-24)
 
 ### Phase 4: Team membership, groups, and permissions
 - **Tier**: Medium
@@ -224,10 +224,10 @@
 ### Phase 22: Email and subscription notifications
 - **Tier**: Medium
 - **Budget**: 250
-- **Domain focus**: Collaboration context — `HistorySubscription`, delivered via `pg-boss` (the background job queue installed in Phase 1, first put to real use here).
-- **Entry state**: Phase 21 history feed and Phase 1 pg-boss exist.
-- **Deliverable**: a subscription model (per user, per project or per MQL filter) and a pg-boss job that, on a matching history event, enqueues and sends an email (a real SMTP call against a test mail server in dev/test — e.g. Mailpit/MailHog in docker-compose, not a stubbed mailer).
-- **Exit state — REAL-PATH TEST (rule 13a, pg-boss is an OWNED dependency)**: a triggering event causes a real job to run through pg-boss and a real email to land in the test mail server's inbox, verified by querying that inbox — not by asserting the job function was called.
+- **Domain focus**: Collaboration context — `HistorySubscription`, delivered via the SQLite-backed job queue (ADR-0002 — a jobs table drained by an in-process worker, established when first needed; replaces the originally planned pg-boss).
+- **Entry state**: Phase 21 history feed exists; the job queue is built here if no earlier phase needed it first.
+- **Deliverable**: a subscription model (per user, per project or per MQL filter) and a queued job that, on a matching history event, enqueues and sends an email (a real SMTP call against a test mail server in dev/test — e.g. Mailpit/MailHog in docker-compose, not a stubbed mailer).
+- **Exit state — REAL-PATH TEST (rule 13a, the job queue is an OWNED dependency)**: a triggering event causes a real job to run through the jobs table and a real email to land in the test mail server's inbox, verified by querying that inbox — not by asserting the job function was called.
 - **Status**: PENDING
 
 ## Milestone 11: Card Trees & Aggregates
@@ -339,6 +339,6 @@
 - **Budget**: 150
 - **Domain focus**: N/A — infrastructure/tooling. This phase's name is docker/deploy-shaped, so rule 13a's stub prohibition applies in full.
 - **Entry state**: All prior milestones are feature-complete against a dev `docker-compose.yml` (Phase 1).
-- **Deliverable**: a production-hardened `docker-compose.yml` (or single install script wrapping it) — `app` image built from a `mingle-ts/Dockerfile`, `db` Postgres service, migrations run automatically on `app` startup, no manual seeding step.
+- **Deliverable**: a production-hardened single-container install (ADR-0002) — `app` image built from `mingle-ts/Dockerfile` with the SQLite volume, migrations run automatically on `app` startup, no manual seeding step, documented backup story (copy the volume's database file).
 - **Exit state — REAL-PATH TEST (rule 13a)**: from a completely clean checkout, `docker compose up` boots both containers; a smoke test script exercises project creation, card creation/editing, a transition, and a wiki page purely through the running containers' real HTTP routes, then queries the `db` container directly to confirm persistence — covering every OWNED dependency (the `app` image and the `db` container this repo ships).
 - **Status**: PENDING

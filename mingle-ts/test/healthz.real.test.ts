@@ -1,9 +1,9 @@
 /**
  * Real-path test for /healthz (rule 13a — Phase 1 acceptance gate).
  *
- * Purpose: proves the running app completes a genuine round-trip to the
- * live Postgres container. No stubs, no injection: it drives the real
- * HTTP endpoint of a stack started with `docker compose up`.
+ * Purpose: proves the running app completes a genuine round-trip to its
+ * file-backed SQLite database (ADR-0002). No stubs, no injection: it
+ * drives the real HTTP endpoint of a stack started with `docker compose up`.
  *
  * Precondition: the compose stack is up (`docker compose up -d` in
  * mingle-ts/). Run via `npm run test:realpath`. HEALTHZ_URL overrides

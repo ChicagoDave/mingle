@@ -10,4 +10,8 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 export default [
   index("routes/home.tsx"),
   route("healthz", "routes/healthz.ts"),
+  route("register", "routes/register.tsx"),
+  route("login", "routes/login.tsx"),
+  route("logout", "routes/logout.ts"),
+  route("profile", "routes/profile.tsx"),
 ] satisfies RouteConfig;

@@ -11,11 +11,11 @@
  * Owner context: infrastructure (operational endpoint, no domain logic).
  */
 import type { HealthzResponse } from "~/shared/wire-types";
-import { pool } from "~/db/client.server";
+import { sqlite } from "~/db/client.server";
 
 /**
- * Probes the database with a genuine `SELECT 1` round-trip and reports
- * service health.
+ * Probes the database with a genuine `SELECT 1` round-trip against the
+ * file-backed SQLite connection and reports service health.
  *
  * Returns HTTP 200 with `status: "ok"` when the query succeeds, or
  * HTTP 503 with `status: "degraded", db: "unreachable"` when it fails.
@@ -25,7 +25,7 @@ import { pool } from "~/db/client.server";
 export async function loader(): Promise<Response> {
   let dbState: HealthzResponse["db"];
   try {
-    await pool.query("SELECT 1");
+    sqlite.prepare("SELECT 1").get();
     dbState = "connected";
   } catch {
     dbState = "unreachable";

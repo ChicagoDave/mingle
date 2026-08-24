@@ -1,6 +1,6 @@
 # ADR-0001: Rewrite Mingle in TypeScript, preserving the UX
 
-**Status**: ACCEPTED
+**Status**: ACCEPTED (superseded in part by ADR-0002: SQLite replaces PostgreSQL, and pg-boss is dropped for a SQLite-backed job table)
 
 ## Context
 

@@ -17,6 +17,13 @@
  * Plain data shapes only.
  */
 
+/**
+ * Field-keyed validation errors returned by form actions (register,
+ * login, profile, password change). Keys are input field names; values
+ * are human-readable messages in legacy Mingle's phrasing.
+ */
+export type FieldErrors = Record<string, string[]>;
+
 /** Health probe response returned by GET /healthz. */
 export interface HealthzResponse {
   /** Overall service status: "ok" only when the database round-trip succeeded. */
