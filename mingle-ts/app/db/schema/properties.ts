@@ -2,13 +2,16 @@
  * Card Management schema — the `property_definitions`,
  * `enumeration_values`, and `card_property_values` tables.
  *
- * Purpose: persistence shape for managed card properties (Phase 7) —
- * PropertyDefinition with a `kind` discriminator (text | number | date
- * | user | enumerated), the ordered value list of an enumerated
- * definition, and one current-value row per card × definition. Values
- * are stored as text in their canonical stored form: numbers as the
- * validated numeric string, dates as ISO `yyyy-mm-dd`, users as the
- * user id, enumerated as the defined value's exact casing. History is
+ * Purpose: persistence shape for managed card properties (Phase 7) and
+ * formula properties (Phase 8) — PropertyDefinition with a `kind`
+ * discriminator (text | number | date | user | enumerated | formula),
+ * the ordered value list of an enumerated definition, and one
+ * current-value row per card × definition. Values are stored as text
+ * in their canonical stored form: numbers as the validated numeric
+ * string, dates as ISO `yyyy-mm-dd`, users as the user id, enumerated
+ * as the defined value's exact casing. Formula values are materialized
+ * here too (recomputed by the domain layer whenever an input changes —
+ * never written directly). History is
  * NOT kept here — every property mutation appends a `card_versions`
  * row whose `property_values` column snapshots all values (Phase 5's
  * versioning, not a parallel mechanism).
@@ -36,8 +39,23 @@ export const propertyDefinitions = sqliteTable(
     projectId: integer("project_id").notNull(),
     /** Display name; unique case-insensitively within the project. */
     name: text("name").notNull(),
-    /** One of PROPERTY_KINDS (wire-types): text|number|date|user|enumerated. */
+    /** One of PROPERTY_KINDS (wire-types): text|number|date|user|enumerated|formula. */
     kind: text("kind").notNull(),
+    /**
+     * The formula expression text — formula kind only, null otherwise.
+     * Validated (parse + type-check) at definition time; references
+     * other properties by NAME (legacy parity — a future property
+     * rename command must rewrite these texts, mirroring
+     * formula_property_definition.rb#rename_property).
+     */
+    formula: text("formula"),
+    /**
+     * Formula kind only: when true, an unset numeric input evaluates
+     * as 0 instead of making the result unset (legacy null_is_zero).
+     */
+    nullIsZero: integer("null_is_zero", { mode: "boolean" })
+      .notNull()
+      .default(false),
     /** Ordering position within the project (appended at definition time). */
     position: integer("position").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp_ms" })

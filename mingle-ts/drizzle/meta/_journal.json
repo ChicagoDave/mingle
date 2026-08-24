@@ -43,6 +43,13 @@
       "when": 1787586470194,
       "tag": "0005_eminent_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787587978743,
+      "tag": "0006_last_kate_bishop",
+      "breakpoints": true
     }
   ]
 }

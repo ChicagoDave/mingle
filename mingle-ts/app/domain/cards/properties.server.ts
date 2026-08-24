@@ -1,16 +1,22 @@
 /**
- * Card Management command handlers — managed card properties (Phase 7).
+ * Card Management command handlers — managed card properties (Phase 7)
+ * and formula properties (Phase 8).
  *
  * Purpose: the only write path for property definitions, their
  * enumeration values, and card property values. Definitions carry a
- * `kind` discriminator (text | number | date | user | enumerated);
- * values are validated per kind against the legacy rules
+ * `kind` discriminator (text | number | date | user | enumerated |
+ * formula); values are validated per kind against the legacy rules
  * (property_definition.rb, property_type.rb, enumeration_value.rb,
- * user_property_definition.rb) and never silently coerced. Every value
- * mutation appends the card's next `card_versions` row (Phase 5's
- * versioning — INSERT only, never update or delete a version) with the
- * full property snapshot, and emits a past-tense event — or rejects
- * (rule 10).
+ * user_property_definition.rb) and never silently coerced. Formula
+ * definitions are compiled (parse + type-check) at definition time via
+ * the formula engine; their values are materialized into
+ * `card_property_values`, recomputed inside the same transaction as
+ * any input change (so the version snapshot carries the fresh value,
+ * matching legacy's same-save recomputation), and can never be set
+ * directly. Every value mutation appends the card's next
+ * `card_versions` row (Phase 5's versioning — INSERT only, never
+ * update or delete a version) with the full property snapshot, and
+ * emits a past-tense event — or rejects (rule 10).
  *
  * Commands → events:
  *   DefinePropertyDefinition → PropertyDefinitionDefined
@@ -42,6 +48,7 @@ import { projects } from "~/db/schema/projects";
 import { users } from "~/db/schema/identity";
 import { teamMemberships } from "~/db/schema/membership";
 import { PROPERTY_KINDS, type PropertyKind } from "~/shared/wire-types";
+import { compileFormula } from "~/domain/cards/formula.server";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import {
@@ -146,29 +153,105 @@ function propertyNameError(name: string): string | null {
   return null;
 }
 
+/**
+ * Recomputes and re-materializes every formula property value for one
+ * card, inside the caller's transaction. Called after any input value
+ * changes (before the version snapshot, so the snapshot carries the
+ * fresh values) and to backfill when a formula is defined.
+ *
+ * @param db - the transaction the surrounding command is using
+ * @param projectId - the card's project
+ * @param cardId - the card to recompute
+ */
+function recomputeCardFormulas(
+  db: BetterSQLite3Database,
+  projectId: number,
+  cardId: number,
+): void {
+  const definitions = db
+    .select()
+    .from(propertyDefinitions)
+    .where(eq(propertyDefinitions.projectId, projectId))
+    .all();
+  const formulas = definitions.filter((d) => d.kind === "formula");
+  if (formulas.length === 0) return;
+  const currentRows = db
+    .select()
+    .from(cardPropertyValues)
+    .where(eq(cardPropertyValues.cardId, cardId))
+    .all();
+  const values = new Map(
+    currentRows.map((row) => [row.propertyDefinitionId, row.value]),
+  );
+  for (const definition of formulas) {
+    // Compile always succeeds here: the definition was validated at
+    // definition time and inputs cannot be formulas themselves.
+    const compiled = compileFormula(
+      definition.formula ?? "",
+      definitions,
+      definition.nullIsZero,
+    );
+    if (!compiled.ok) continue;
+    const next = compiled.formula.evaluate(values);
+    const currentRow = currentRows.find(
+      (row) => row.propertyDefinitionId === definition.id,
+    );
+    if (next === null) {
+      if (currentRow)
+        db.delete(cardPropertyValues)
+          .where(eq(cardPropertyValues.id, currentRow.id))
+          .run();
+    } else if (currentRow) {
+      if (currentRow.value !== next)
+        db.update(cardPropertyValues)
+          .set({ value: next, updatedAt: new Date() })
+          .where(eq(cardPropertyValues.id, currentRow.id))
+          .run();
+    } else {
+      db.insert(cardPropertyValues)
+        .values({ cardId, propertyDefinitionId: definition.id, value: next })
+        .run();
+    }
+  }
+}
+
 export interface DefinePropertyDefinitionInput {
   projectId: number;
   name: string;
   kind: string;
   /** Allowed values, in order — enumerated kind only. */
   values?: string[];
+  /** The formula expression — formula kind only. */
+  formula?: string | null;
+  /** Evaluate unset numeric inputs as 0 — formula kind only. */
+  nullIsZero?: boolean;
   actorUserId: number;
 }
 
 /**
- * DefinePropertyDefinition — adds a managed property to a project.
+ * DefinePropertyDefinition — adds a managed or formula property to a
+ * project.
  *
  * DOES: inserts a `property_definitions` row (position appended at the
  * end) plus, for the enumerated kind, one ordered `enumeration_values`
- * row per supplied value, and appends a PropertyDefinitionDefined
+ * row per supplied value; for the formula kind, compiles the formula
+ * (parse + type-check against the project's existing definitions) and
+ * backfills the computed value into `card_property_values` for every
+ * existing card in the project (no version rows appended — introducing
+ * derived data is not a card edit); appends a PropertyDefinitionDefined
  * event, all in one transaction.
  * REJECTS: unknown project, actor below project administrator (legacy:
  * property management is PROJECT_ADMIN), invalid name (blank, over 40
  * chars, containing []"&=#; characters, '_', a reserved predefined
  * name, or taken case-insensitively in the project), unknown kind,
- * values supplied for a non-enumerated kind, or an invalid enumeration
+ * values supplied for a non-enumerated kind, an invalid enumeration
  * value (blank, over 255 chars, parenthesis-wrapped, or a
- * case-insensitive duplicate within the list).
+ * case-insensitive duplicate within the list), formula/nullIsZero
+ * supplied for a non-formula kind, or — at definition time, never at
+ * evaluation time — a formula that is blank, malformed, references an
+ * unknown/non-numeric/non-date property or another formula property,
+ * or combines types illegally (date+date, number-date, date in * or /,
+ * negated date).
  *
  * @returns the created definition row, or field errors
  */
@@ -208,6 +291,8 @@ export function definePropertyDefinition(
   const values = (input.values ?? []).map((value) => value.trim());
   if (kind !== "enumerated" && values.length > 0)
     return reject("values", "are only allowed for a managed list property");
+  if (kind !== "formula" && (input.formula?.trim() || input.nullIsZero))
+    return reject("formula", "is only allowed for a formula property");
   const seen = new Set<string>();
   for (const value of values) {
     if (!value) return reject("values", "can't include a blank value");
@@ -223,6 +308,25 @@ export function definePropertyDefinition(
     seen.add(value.toLowerCase());
   }
 
+  const formulaText = input.formula?.trim() || null;
+  if (kind === "formula") {
+    const existing = db
+      .select({
+        id: propertyDefinitions.id,
+        name: propertyDefinitions.name,
+        kind: propertyDefinitions.kind,
+      })
+      .from(propertyDefinitions)
+      .where(eq(propertyDefinitions.projectId, input.projectId))
+      .all();
+    const compiled = compileFormula(
+      formulaText ?? "",
+      existing,
+      input.nullIsZero ?? false,
+    );
+    if (!compiled.ok) return { ok: false, errors: { formula: compiled.errors } };
+  }
+
   const last = db.get<{ highest: number }>(
     sql`SELECT COALESCE(MAX(position), 0) AS highest FROM ${propertyDefinitions} WHERE ${propertyDefinitions.projectId} = ${input.projectId}`,
   );
@@ -234,6 +338,8 @@ export function definePropertyDefinition(
         name,
         kind,
         position: (last?.highest ?? 0) + 1,
+        formula: kind === "formula" ? formulaText : null,
+        nullIsZero: kind === "formula" ? (input.nullIsZero ?? false) : false,
       })
       .returning()
       .get();
@@ -242,11 +348,26 @@ export function definePropertyDefinition(
         .values({ propertyDefinitionId: row.id, value, position: i + 1 })
         .run();
     });
+    if (kind === "formula") {
+      // Backfill the computed value for every existing card so the new
+      // property is immediately readable (legacy update_all_cards intent,
+      // minus its version churn — see the header's rationale).
+      const cardRows = tx
+        .select({ id: cards.id })
+        .from(cards)
+        .where(eq(cards.projectId, input.projectId))
+        .all();
+      for (const card of cardRows)
+        recomputeCardFormulas(tx, input.projectId, card.id);
+    }
     emitEvent(tx, {
       type: "PropertyDefinitionDefined",
       aggregateType: "Project",
       aggregateId: input.projectId,
-      payload: { name: row.name, kind, values },
+      payload:
+        kind === "formula"
+          ? { name: row.name, kind, formula: formulaText }
+          : { name: row.name, kind, values },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: row } as CommandResult<PropertyDefinitionRow>;
@@ -267,6 +388,12 @@ function canonicalValue(
   raw: string,
 ): CommandResult<string> {
   switch (definition.kind as PropertyKind) {
+    case "formula":
+      // unreachable: setCardPropertyValue rejects formula kinds first
+      return reject(
+        "property",
+        `${definition.name} is a formula property and cannot be set directly`,
+      );
     case "text": {
       if (raw.length > VALUE_MAX_LENGTH)
         return reject(
@@ -387,12 +514,17 @@ export interface SetCardPropertyValueInput {
  * property snapshot (Phase 5's versioning — property history and card
  * history are one trail), and appends a CardPropertyValueSet event,
  * all in one transaction.
- * REJECTS: unknown project, card, or property definition; actor below
- * full team member; a value invalid for the definition's kind
- * (non-numeric for number, unparseable for date, over-long or
- * parenthesis-wrapped text, a non-member or unknown user, a value
- * outside an enumerated definition's list — never silently coerced);
- * or no actual change (same value, or clearing an unset property).
+ * After the value change and before the snapshot, every formula
+ * property of the project is recomputed for this card in the same
+ * transaction, so the version records the derived values as they stood
+ * after the change (legacy same-save recomputation).
+ * REJECTS: unknown project, card, or property definition; a formula
+ * property (calculated — never set directly); actor below full team
+ * member; a value invalid for the definition's kind (non-numeric for
+ * number, unparseable for date, over-long or parenthesis-wrapped text,
+ * a non-member or unknown user, a value outside an enumerated
+ * definition's list — never silently coerced); or no actual change
+ * (same value, or clearing an unset property).
  *
  * @returns the updated card row, or field errors
  */
@@ -423,6 +555,11 @@ export function setCardPropertyValue(
     )
     .get();
   if (!definition) return reject("property", "does not exist");
+  if (definition.kind === "formula")
+    return reject(
+      "property",
+      `${definition.name} is a formula property and cannot be set directly`,
+    );
 
   const raw = input.value?.trim() || null;
   let canonical: string | null = null;
@@ -471,6 +608,7 @@ export function setCardPropertyValue(
         })
         .run();
     }
+    recomputeCardFormulas(tx, input.projectId, card.id);
     const nextVersion = card.version + 1;
     const row = tx
       .update(cards)

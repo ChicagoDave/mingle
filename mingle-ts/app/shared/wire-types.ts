@@ -81,12 +81,14 @@ export const PROJECT_ROLE_LABELS: Record<ProjectRole, string> = {
 export const DEFAULT_PROJECT_ROLE: ProjectRole = "full_member";
 
 /**
- * Managed property definition kinds (Phase 7), the `kind` discriminator
- * on `property_definitions`. Maps to the legacy STI classes:
+ * Property definition kinds (Phases 7–8), the `kind` discriminator on
+ * `property_definitions`. Maps to the legacy STI classes:
  * text/number → TextPropertyDefinition (is_numeric toggles),
  * date → DatePropertyDefinition, user → UserPropertyDefinition,
- * enumerated → EnumeratedPropertyDefinition. Crosses the wire in the
- * define-property form's kind selector.
+ * enumerated → EnumeratedPropertyDefinition,
+ * formula → FormulaPropertyDefinition (calculated — never set
+ * directly). Crosses the wire in the define-property form's kind
+ * selector.
  */
 export const PROPERTY_KINDS = [
   "text",
@@ -94,6 +96,7 @@ export const PROPERTY_KINDS = [
   "date",
   "user",
   "enumerated",
+  "formula",
 ] as const;
 
 /** One of PROPERTY_KINDS. */
@@ -106,6 +109,7 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
   date: "Date",
   user: "Automatically generated from the team list",
   enumerated: "Managed text list",
+  formula: "Formula",
 };
 
 /** Health probe response returned by GET /healthz. */

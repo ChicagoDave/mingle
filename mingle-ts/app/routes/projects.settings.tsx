@@ -66,6 +66,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       id: propertyDefinitions.id,
       name: propertyDefinitions.name,
       kind: propertyDefinitions.kind,
+      formula: propertyDefinitions.formula,
     })
     .from(propertyDefinitions)
     .where(eq(propertyDefinitions.projectId, project.id))
@@ -164,6 +165,8 @@ export async function action({ request, params }: Route.ActionArgs) {
         .split("\n")
         .map((value) => value.trim())
         .filter(Boolean),
+      formula: form.get("formula") ? String(form.get("formula")) : null,
+      nullIsZero: form.get("nullIsZero") === "on",
       actorUserId: userId,
     });
     return result.ok
@@ -311,6 +314,8 @@ export default function ProjectSettings() {
                 property.kind}
               {property.kind === "enumerated" ? (
                 <>: {property.values.join(", ") || "(no values)"}</>
+              ) : property.kind === "formula" ? (
+                <>: {property.formula}</>
               ) : null}
             </li>
           ))}
@@ -347,6 +352,18 @@ export default function ProjectSettings() {
             <textarea name="values" rows={4} />
           </label>
           <ErrorLines field="values" errors={errors} />
+        </p>
+        <p>
+          <label>
+            Formula (formula kind only, e.g. 'Estimate' * 2)
+            <br />
+            <input name="formula" />
+          </label>{" "}
+          <label>
+            <input type="checkbox" name="nullIsZero" /> Treat unset numbers
+            as 0
+          </label>
+          <ErrorLines field="formula" errors={errors} />
         </p>
         <button type="submit">Add property</button>
       </Form>

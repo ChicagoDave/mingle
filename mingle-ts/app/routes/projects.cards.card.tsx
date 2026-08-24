@@ -396,7 +396,13 @@ export default function CardPage() {
       {properties.length === 0 ? (
         <p>No properties defined. Define them in project settings.</p>
       ) : (
-        properties.map((property) => (
+        properties.map((property) =>
+          property.kind === "formula" ? (
+            <p key={property.id}>
+              {property.name}: {property.value ?? "(not set)"}{" "}
+              <small>(formula)</small>
+            </p>
+          ) : (
           <Form method="post" key={property.id}>
             <input type="hidden" name="intent" value="set-property" />
             <input
@@ -437,7 +443,8 @@ export default function CardPage() {
               </label>
             </p>
           </Form>
-        ))
+          ),
+        )
       )}
 
       <h2>Checklist</h2>

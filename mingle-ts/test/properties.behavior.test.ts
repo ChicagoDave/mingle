@@ -288,7 +288,7 @@ describe("DefinePropertyDefinition", () => {
   });
 
   it("rejects an unknown kind", () => {
-    const errors = mustReject(define("Estimate", "formula"), "unknown kind");
+    const errors = mustReject(define("Estimate", "aggregate"), "unknown kind");
     expect(errors.kind).toEqual(["must be selected"]);
     expect(reloadDefinitions()).toHaveLength(0);
   });
