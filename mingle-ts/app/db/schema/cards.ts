@@ -108,6 +108,16 @@ export const cardVersions = sqliteTable(
     description: text("description"),
     /** Snapshot of the type's name at version time (historical fidelity). */
     cardTypeName: text("card_type_name").notNull(),
+    /**
+     * JSON object snapshot of the card's managed property values at
+     * version time, keyed by property definition ID (stringified) with
+     * canonical stored values — id-keyed so snapshots stay immutable
+     * through property renames (ADR-0004); readers join
+     * property_definitions for the current name. "{}" when the card has
+     * no property values set; the deletion version snapshots "{}"
+     * (mirroring its emptied description).
+     */
+    propertyValues: text("property_values").notNull().default("{}"),
     /** True only on the final version appended when the card is deleted. */
     isDeletion: integer("is_deletion", { mode: "boolean" })
       .notNull()

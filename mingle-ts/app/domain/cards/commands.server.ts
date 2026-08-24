@@ -2,7 +2,9 @@
  * Card Management command handlers — Card aggregate, card types, and
  * versioned history (Phase 5).
  *
- * Purpose: the only write path for cards, card types, and the
+ * Purpose: the write path for cards and card types; together with its
+ * sibling app/domain/cards modules (properties.server.ts appends
+ * versions for property mutations) it is the only writer of the
  * append-only `card_versions` trail. Each handler authorizes the actor
  * through the Phase 4 checkpoint at the legacy privilege level (card
  * create/update: full team member; card deletion and card type
@@ -43,6 +45,8 @@ import {
   attachments,
   cardChecklistItems,
 } from "~/db/schema/card-content";
+import { cardPropertyValues } from "~/db/schema/properties";
+import { cardPropertySnapshot } from "~/domain/cards/properties.server";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
@@ -341,6 +345,7 @@ export function updateCard(
         name,
         description,
         cardTypeName: cardType.name,
+        propertyValues: JSON.stringify(cardPropertySnapshot(tx, current.id)),
         createdByUserId: current.createdByUserId,
         modifiedByUserId: input.actorUserId,
       })
@@ -365,9 +370,10 @@ export interface DeleteCardInput {
 /**
  * DeleteCard — deletes a card, keeping its history.
  *
- * DOES: deletes the `cards` row along with the card's checklist items
- * and attachment rows (legacy dependent-destroy parity; attachment
- * BYTES are the caller's cleanup via the deleted rows' fileKeys), keeps
+ * DOES: deletes the `cards` row along with the card's checklist items,
+ * attachment rows, and property value rows (legacy dependent-destroy
+ * parity; attachment BYTES are the caller's cleanup via the deleted
+ * rows' fileKeys), keeps
  * every existing `card_versions` row, appends a final deletion version
  * (next version number, name and type snapshot retained, description
  * empty — legacy create_card_deletion_version parity — isDeletion
@@ -417,6 +423,9 @@ export function deleteCard(
       .where(eq(cardChecklistItems.cardId, current.id))
       .run();
     tx.delete(attachments).where(eq(attachments.cardId, current.id)).run();
+    tx.delete(cardPropertyValues)
+      .where(eq(cardPropertyValues.cardId, current.id))
+      .run();
     tx.delete(cards).where(eq(cards.id, current.id)).run();
     emitEvent(tx, {
       type: "CardDeleted",

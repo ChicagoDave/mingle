@@ -1,10 +1,12 @@
 /**
  * /projects/:identifier/settings — project settings and variables.
  *
- * Purpose: the Phase 3 configuration route. Two forms post to one
- * action, discriminated by the `intent` field: "settings" runs
+ * Purpose: the project configuration route (Phases 3–7). Forms post to
+ * one action, discriminated by the `intent` field: "settings" runs
  * UpdateProjectSettings (redirecting when the identifier changed),
- * "variable" runs DefineProjectVariable. Requires a logged-in session.
+ * "variable" runs DefineProjectVariable, "cardType" runs
+ * DefineCardType, "property" runs DefinePropertyDefinition (enumerated
+ * values arrive one per line). Requires a logged-in session.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -16,16 +18,21 @@ import type { Route } from "./+types/projects.settings";
 import {
   PROJECT_VARIABLE_DATA_TYPES,
   PROJECT_VARIABLE_DATA_TYPE_LABELS,
+  PROPERTY_KINDS,
+  PROPERTY_KIND_LABELS,
   type FieldErrors,
+  type PropertyKind,
 } from "~/shared/wire-types";
 import { db } from "~/db/client.server";
 import { projects, projectVariables } from "~/db/schema/projects";
 import { cardTypes } from "~/db/schema/cards";
+import { enumerationValues, propertyDefinitions } from "~/db/schema/properties";
 import {
   defineProjectVariable,
   updateProjectSettings,
 } from "~/domain/projects/commands.server";
 import { defineCardType } from "~/domain/cards/commands.server";
+import { definePropertyDefinition } from "~/domain/cards/properties.server";
 import { requireUserId } from "~/auth/session.server";
 
 /** Loads the project's editable settings and its defined variables. */
@@ -54,6 +61,35 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(cardTypes.projectId, project.id))
     .orderBy(asc(cardTypes.position))
     .all();
+  const definitions = db
+    .select({
+      id: propertyDefinitions.id,
+      name: propertyDefinitions.name,
+      kind: propertyDefinitions.kind,
+    })
+    .from(propertyDefinitions)
+    .where(eq(propertyDefinitions.projectId, project.id))
+    .orderBy(asc(propertyDefinitions.position))
+    .all();
+  const allowedValues = db
+    .select({
+      propertyDefinitionId: enumerationValues.propertyDefinitionId,
+      value: enumerationValues.value,
+    })
+    .from(enumerationValues)
+    .innerJoin(
+      propertyDefinitions,
+      eq(propertyDefinitions.id, enumerationValues.propertyDefinitionId),
+    )
+    .where(eq(propertyDefinitions.projectId, project.id))
+    .orderBy(asc(enumerationValues.position))
+    .all();
+  const properties = definitions.map((definition) => ({
+    ...definition,
+    values: allowedValues
+      .filter((row) => row.propertyDefinitionId === definition.id)
+      .map((row) => row.value),
+  }));
   return {
     project: {
       name: project.name,
@@ -62,6 +98,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     },
     variables,
     cardTypes: types,
+    properties,
   };
 }
 
@@ -118,12 +155,28 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: "cardType" as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "property") {
+    const result = definePropertyDefinition(db, {
+      projectId: project.id,
+      name: String(form.get("name") ?? ""),
+      kind: String(form.get("kind") ?? ""),
+      values: String(form.get("values") ?? "")
+        .split("\n")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      actorUserId: userId,
+    });
+    return result.ok
+      ? { saved: "property" as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
 /** Project settings page. Styling is deliberately minimal until the UX-harvest phases. */
 export default function ProjectSettings() {
-  const { project, variables, cardTypes } = useLoaderData<typeof loader>();
+  const { project, variables, cardTypes, properties } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
@@ -244,6 +297,58 @@ export default function ProjectSettings() {
           <ErrorLines field="name" errors={errors} />
         </p>
         <button type="submit">Add card type</button>
+      </Form>
+
+      <h2>Card properties</h2>
+      {properties.length === 0 ? (
+        <p>No properties defined.</p>
+      ) : (
+        <ul>
+          {properties.map((property) => (
+            <li key={property.id}>
+              {property.name} —{" "}
+              {PROPERTY_KIND_LABELS[property.kind as PropertyKind] ??
+                property.kind}
+              {property.kind === "enumerated" ? (
+                <>: {property.values.join(", ") || "(no values)"}</>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      <Form method="post">
+        <input type="hidden" name="intent" value="property" />
+        <p>
+          <label>
+            Name
+            <br />
+            <input name="name" />
+          </label>
+          <ErrorLines field="name" errors={errors} />
+        </p>
+        <p>
+          <label>
+            Kind
+            <br />
+            <select name="kind" defaultValue="text">
+              {PROPERTY_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {PROPERTY_KIND_LABELS[kind]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <ErrorLines field="kind" errors={errors} />
+        </p>
+        <p>
+          <label>
+            Values (managed list only, one per line)
+            <br />
+            <textarea name="values" rows={4} />
+          </label>
+          <ErrorLines field="values" errors={errors} />
+        </p>
+        <button type="submit">Add property</button>
       </Form>
     </main>
   );

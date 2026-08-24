@@ -80,6 +80,34 @@ export const PROJECT_ROLE_LABELS: Record<ProjectRole, string> = {
 /** The role a new team member gets when none is chosen (legacy MembershipRole.default). */
 export const DEFAULT_PROJECT_ROLE: ProjectRole = "full_member";
 
+/**
+ * Managed property definition kinds (Phase 7), the `kind` discriminator
+ * on `property_definitions`. Maps to the legacy STI classes:
+ * text/number → TextPropertyDefinition (is_numeric toggles),
+ * date → DatePropertyDefinition, user → UserPropertyDefinition,
+ * enumerated → EnumeratedPropertyDefinition. Crosses the wire in the
+ * define-property form's kind selector.
+ */
+export const PROPERTY_KINDS = [
+  "text",
+  "number",
+  "date",
+  "user",
+  "enumerated",
+] as const;
+
+/** One of PROPERTY_KINDS. */
+export type PropertyKind = (typeof PROPERTY_KINDS)[number];
+
+/** Human labels for the kind selector (legacy describe_type strings). */
+export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
+  text: "Any text",
+  number: "Any number",
+  date: "Date",
+  user: "Automatically generated from the team list",
+  enumerated: "Managed text list",
+};
+
 /** Health probe response returned by GET /healthz. */
 export interface HealthzResponse {
   /** Overall service status: "ok" only when the database round-trip succeeded. */

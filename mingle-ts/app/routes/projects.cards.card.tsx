@@ -7,9 +7,11 @@
  * DeleteCard (redirecting to the list), "attach" saves the uploaded
  * bytes then runs AddCardAttachment (deleting the bytes again on
  * rejection), "remove-attachment" runs RemoveCardAttachment then
- * deletes the bytes, and "checklist-add"/"checklist-mark"/
- * "checklist-remove" run the checklist commands. The append-only
- * version trail renders newest-first. Authorization is enforced by the
+ * deletes the bytes, "checklist-add"/"checklist-mark"/
+ * "checklist-remove" run the checklist commands, and "set-property"
+ * runs SetCardPropertyValue (blank value clears). The append-only
+ * version trail renders newest-first with each version's property
+ * snapshot. Authorization is enforced by the
  * command handlers; the route surfaces rejections. Requires a
  * logged-in session.
  *
@@ -26,8 +28,15 @@ import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
 import { cards, cardTypes, cardVersions } from "~/db/schema/cards";
 import { attachments, cardChecklistItems } from "~/db/schema/card-content";
+import {
+  cardPropertyValues,
+  enumerationValues,
+  propertyDefinitions,
+} from "~/db/schema/properties";
 import { users } from "~/db/schema/identity";
+import { teamMemberships } from "~/db/schema/membership";
 import { deleteCard, updateCard } from "~/domain/cards/commands.server";
+import { setCardPropertyValue } from "~/domain/cards/properties.server";
 import {
   addCardAttachment,
   removeCardAttachment,
@@ -72,6 +81,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       version: cardVersions.version,
       name: cardVersions.name,
       cardTypeName: cardVersions.cardTypeName,
+      propertyValues: cardVersions.propertyValues,
       modifiedBy: users.name,
       createdAt: cardVersions.createdAt,
     })
@@ -101,6 +111,68 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(cardChecklistItems.cardId, card.id))
     .orderBy(asc(cardChecklistItems.completed), asc(cardChecklistItems.position))
     .all();
+  const definitions = db
+    .select({
+      id: propertyDefinitions.id,
+      name: propertyDefinitions.name,
+      kind: propertyDefinitions.kind,
+    })
+    .from(propertyDefinitions)
+    .where(eq(propertyDefinitions.projectId, project.id))
+    .orderBy(asc(propertyDefinitions.position))
+    .all();
+  const allowedValues = db
+    .select({
+      propertyDefinitionId: enumerationValues.propertyDefinitionId,
+      value: enumerationValues.value,
+    })
+    .from(enumerationValues)
+    .innerJoin(
+      propertyDefinitions,
+      eq(propertyDefinitions.id, enumerationValues.propertyDefinitionId),
+    )
+    .where(eq(propertyDefinitions.projectId, project.id))
+    .orderBy(asc(enumerationValues.position))
+    .all();
+  const currentValues = db
+    .select({
+      propertyDefinitionId: cardPropertyValues.propertyDefinitionId,
+      value: cardPropertyValues.value,
+    })
+    .from(cardPropertyValues)
+    .where(eq(cardPropertyValues.cardId, card.id))
+    .all();
+  const teamMembers = db
+    .select({ id: users.id, name: users.name })
+    .from(teamMemberships)
+    .innerJoin(users, eq(users.id, teamMemberships.userId))
+    .where(eq(teamMemberships.projectId, project.id))
+    .orderBy(asc(users.name))
+    .all();
+  const properties = definitions.map((definition) => ({
+    ...definition,
+    value:
+      currentValues.find((row) => row.propertyDefinitionId === definition.id)
+        ?.value ?? null,
+    allowedValues: allowedValues
+      .filter((row) => row.propertyDefinitionId === definition.id)
+      .map((row) => row.value),
+  }));
+  // Snapshots are keyed by definition id (ADR-0004); display joins the
+  // current names, matching legacy's history-shows-current-name behavior.
+  const propertyNameById = new Map(
+    definitions.map((definition) => [String(definition.id), definition.name]),
+  );
+  const versionsWithProperties = versions.map(
+    ({ propertyValues: snapshot, ...version }) => ({
+      ...version,
+      propertySummary: Object.entries(
+        JSON.parse(snapshot) as Record<string, string>,
+      )
+        .map(([id, value]) => `${propertyNameById.get(id) ?? `#${id}`}: ${value}`)
+        .join(", "),
+    }),
+  );
   return {
     project: { name: project.name, identifier: project.identifier },
     card: {
@@ -111,9 +183,11 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       version: card.version,
     },
     cardTypes: types,
-    versions,
+    versions: versionsWithProperties,
     attachments: cardAttachments,
     checklist,
+    properties,
+    teamMembers,
   };
 }
 
@@ -228,13 +302,33 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: true as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "set-property") {
+    const result = setCardPropertyValue(db, {
+      projectId: project.id,
+      cardNumber,
+      propertyDefinitionId: Number(form.get("propertyDefinitionId") ?? 0),
+      value: form.get("value") ? String(form.get("value")) : null,
+      actorUserId,
+    });
+    return result.ok
+      ? { saved: true as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
 /** Card page with edit form and version history. Minimal styling until UX harvest. */
 export default function CardPage() {
-  const { project, card, cardTypes, versions, attachments, checklist } =
-    useLoaderData<typeof loader>();
+  const {
+    project,
+    card,
+    cardTypes,
+    versions,
+    attachments,
+    checklist,
+    properties,
+    teamMembers,
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
@@ -295,6 +389,56 @@ export default function CardPage() {
         <input type="hidden" name="intent" value="delete" />
         <button type="submit">Delete card</button>
       </Form>
+
+      <h2>Properties</h2>
+      <ErrorLines field="property" errors={errors} />
+      <ErrorLines field="value" errors={errors} />
+      {properties.length === 0 ? (
+        <p>No properties defined. Define them in project settings.</p>
+      ) : (
+        properties.map((property) => (
+          <Form method="post" key={property.id}>
+            <input type="hidden" name="intent" value="set-property" />
+            <input
+              type="hidden"
+              name="propertyDefinitionId"
+              value={property.id}
+            />
+            <p>
+              <label>
+                {property.name}
+                <br />
+                {property.kind === "enumerated" ? (
+                  <select name="value" defaultValue={property.value ?? ""}>
+                    <option value="">(not set)</option>
+                    {property.allowedValues.map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                ) : property.kind === "user" ? (
+                  <select name="value" defaultValue={property.value ?? ""}>
+                    <option value="">(not set)</option>
+                    {teamMembers.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    name="value"
+                    type={property.kind === "date" ? "date" : "text"}
+                    defaultValue={property.value ?? ""}
+                  />
+                )}{" "}
+                <button type="submit">Set</button>
+              </label>
+            </p>
+          </Form>
+        ))
+      )}
 
       <h2>Checklist</h2>
       <ErrorLines field="item" errors={errors} />
@@ -369,6 +513,7 @@ export default function CardPage() {
           <li key={v.version}>
             v{v.version} — {v.name} ({v.cardTypeName}) by {v.modifiedBy} at{" "}
             {new Date(v.createdAt).toISOString()}
+            {v.propertySummary ? <> — {v.propertySummary}</> : null}
           </li>
         ))}
       </ul>
