@@ -10,7 +10,7 @@
  *
  * Owner context: Card Management (HTTP adapter).
  */
-import { eq, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.settings";
 import {
@@ -20,10 +20,12 @@ import {
 } from "~/shared/wire-types";
 import { db } from "~/db/client.server";
 import { projects, projectVariables } from "~/db/schema/projects";
+import { cardTypes } from "~/db/schema/cards";
 import {
   defineProjectVariable,
   updateProjectSettings,
 } from "~/domain/projects/commands.server";
+import { defineCardType } from "~/domain/cards/commands.server";
 import { requireUserId } from "~/auth/session.server";
 
 /** Loads the project's editable settings and its defined variables. */
@@ -46,6 +48,12 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(projectVariables.projectId, project.id))
     .orderBy(sql`lower(${projectVariables.name})`)
     .all();
+  const types = db
+    .select({ id: cardTypes.id, name: cardTypes.name })
+    .from(cardTypes)
+    .where(eq(cardTypes.projectId, project.id))
+    .orderBy(asc(cardTypes.position))
+    .all();
   return {
     project: {
       name: project.name,
@@ -53,6 +61,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       description: project.description,
     },
     variables,
+    cardTypes: types,
   };
 }
 
@@ -99,12 +108,22 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: "variable" as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "cardType") {
+    const result = defineCardType(db, {
+      projectId: project.id,
+      name: String(form.get("name") ?? ""),
+      actorUserId: userId,
+    });
+    return result.ok
+      ? { saved: "cardType" as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
 /** Project settings page. Styling is deliberately minimal until the UX-harvest phases. */
 export default function ProjectSettings() {
-  const { project, variables } = useLoaderData<typeof loader>();
+  const { project, variables, cardTypes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
@@ -116,7 +135,10 @@ export default function ProjectSettings() {
         {project.name} <small>({project.identifier})</small>
       </h1>
       <p>
-        <Link to="/projects">All projects</Link>
+        <Link to="/projects">All projects</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/team`}>Team</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/groups`}>Groups</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/cards`}>Cards</Link>
       </p>
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
 
@@ -203,6 +225,25 @@ export default function ProjectSettings() {
           <ErrorLines field="value" errors={errors} />
         </p>
         <button type="submit">Define variable</button>
+      </Form>
+
+      <h2>Card types</h2>
+      <ul>
+        {cardTypes.map((type) => (
+          <li key={type.id}>{type.name}</li>
+        ))}
+      </ul>
+      <Form method="post">
+        <input type="hidden" name="intent" value="cardType" />
+        <p>
+          <label>
+            Name
+            <br />
+            <input name="name" />
+          </label>
+          <ErrorLines field="name" errors={errors} />
+        </p>
+        <button type="submit">Add card type</button>
       </Form>
     </main>
   );

@@ -55,6 +55,31 @@ export const PROJECT_VARIABLE_DATA_TYPE_LABELS: Record<
   CardType: "Card",
 };
 
+/**
+ * Project team roles (legacy MembershipRole::PROJECT_ROLES ids, stored
+ * in `team_memberships.role`). Crosses the wire in the team page's role
+ * selector. The site-wide admin flag (`users.admin`) is not a project
+ * role — it outranks all of these (legacy PrivilegeLevel::MINGLE_ADMIN).
+ */
+export const PROJECT_ROLES = [
+  "project_admin",
+  "full_member",
+  "readonly_member",
+] as const;
+
+/** One of PROJECT_ROLES. */
+export type ProjectRole = (typeof PROJECT_ROLES)[number];
+
+/** Human labels for the role selector (legacy MembershipRole names). */
+export const PROJECT_ROLE_LABELS: Record<ProjectRole, string> = {
+  project_admin: "Project administrator",
+  full_member: "Team member",
+  readonly_member: "Read only team member",
+};
+
+/** The role a new team member gets when none is chosen (legacy MembershipRole.default). */
+export const DEFAULT_PROJECT_ROLE: ProjectRole = "full_member";
+
 /** Health probe response returned by GET /healthz. */
 export interface HealthzResponse {
   /** Overall service status: "ok" only when the database round-trip succeeded. */

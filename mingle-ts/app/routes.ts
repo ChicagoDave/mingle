@@ -17,4 +17,13 @@ export default [
   route("projects", "routes/projects.tsx"),
   route("projects/new", "routes/projects.new.tsx"),
   route("projects/:identifier/settings", "routes/projects.settings.tsx"),
+  route("projects/:identifier/team", "routes/projects.team.tsx"),
+  route("projects/:identifier/groups", "routes/projects.groups.tsx"),
+  route("projects/:identifier/cards", "routes/projects.cards.tsx"),
+  route("projects/:identifier/cards/new", "routes/projects.cards.new.tsx"),
+  route("projects/:identifier/cards/:number", "routes/projects.cards.card.tsx"),
+  route(
+    "projects/:identifier/cards/:number/attachments/:attachmentId",
+    "routes/projects.cards.attachment.ts",
+  ),
 ] satisfies RouteConfig;

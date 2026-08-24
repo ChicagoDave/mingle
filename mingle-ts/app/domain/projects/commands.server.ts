@@ -6,7 +6,10 @@
  * legacy product's rules (project.rb, identifiable.rb,
  * project_variable.rb), mutates state, and emits a past-tense domain
  * event — or rejects with typed field errors (rule 10: no silent state
- * changes).
+ * changes). Since Phase 4, every handler also authorizes the actor
+ * through the Identity & Access checkpoint at the legacy privilege
+ * level: project creation is a Mingle-administrator action, settings
+ * and variable changes are project-administrator actions.
  *
  * Commands → events:
  *   CreateProject          → ProjectCreated
@@ -28,10 +31,16 @@ import {
   type ProjectRow,
   type ProjectVariableRow,
 } from "~/db/schema/projects";
-import { users } from "~/db/schema/identity";
+import { teamMemberships } from "~/db/schema/membership";
+import { cardTypes } from "~/db/schema/cards";
 import { PROJECT_VARIABLE_DATA_TYPES } from "~/shared/wire-types";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
+import {
+  authorizeProjectAction,
+  authorizeSiteAdminAction,
+  PrivilegeLevel,
+} from "~/domain/identity/authorization.server";
 
 // Legacy parity rules (mingle/app/models/{project,identifiable}.rb):
 const IDENTIFIER_MAX_LENGTH = 30;
@@ -159,10 +168,13 @@ export interface CreateProjectInput {
  * CreateProject — creates a project.
  *
  * DOES: inserts a `projects` row (identifier generated from the name
- * when not supplied) and appends a ProjectCreated event.
- * REJECTS: blank or taken name, name over 255 chars, invalid identifier
- * (format, leading digit, over 30 chars, `mi_NNNNNN` internal prefix),
- * or taken identifier.
+ * when not supplied), gives the new project the default "Card" card
+ * type (legacy project.rb parity), and appends ProjectCreated and
+ * CardTypeDefined events, all in one transaction.
+ * REJECTS: actor not a Mingle administrator (legacy: project creation
+ * is MINGLE_ADMIN-only), blank or taken name, name over 255 chars,
+ * invalid identifier (format, leading digit, over 30 chars, `mi_NNNNNN`
+ * internal prefix), or taken identifier.
  *
  * @returns the created project row, or field errors
  */
@@ -170,6 +182,9 @@ export function createProject(
   db: BetterSQLite3Database,
   input: CreateProjectInput,
 ): CommandResult<ProjectRow> {
+  const denied = authorizeSiteAdminAction(db, input.actorUserId);
+  if (denied) return denied;
+
   const name = input.name.trim();
   const description = input.description?.trim() || null;
   const identifier =
@@ -199,6 +214,18 @@ export function createProject(
       payload: { name: row.name, identifier: row.identifier },
       actorUserId: input.actorUserId,
     });
+    // Every new project starts with the default "Card" type (legacy
+    // project.rb: card_types.create!(:name => 'Card') if blank).
+    tx.insert(cardTypes)
+      .values({ projectId: row.id, name: "Card", position: 1 })
+      .run();
+    emitEvent(tx, {
+      type: "CardTypeDefined",
+      aggregateType: "Project",
+      aggregateId: row.id,
+      payload: { name: "Card" },
+      actorUserId: input.actorUserId,
+    });
     return { ok: true, value: row } as CommandResult<ProjectRow>;
   });
 }
@@ -217,8 +244,9 @@ export interface UpdateProjectSettingsInput {
  *
  * DOES: updates the `projects` row (updated_at stamped) and appends a
  * ProjectSettingsUpdated event naming the changed fields.
- * REJECTS: unknown project, blank/taken/over-long name, or an invalid
- * or taken identifier (same rules as CreateProject).
+ * REJECTS: unknown project, actor below project administrator for the
+ * project (legacy: update is PROJECT_ADMIN), blank/taken/over-long
+ * name, or an invalid or taken identifier (same rules as CreateProject).
  *
  * @returns the updated project row, or field errors
  */
@@ -232,6 +260,13 @@ export function updateProjectSettings(
     .where(eq(projects.id, input.projectId))
     .get();
   if (!current) return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.PROJECT_ADMIN,
+  );
+  if (denied) return denied;
 
   const name = input.name.trim();
   const identifier = input.identifier.trim();
@@ -275,13 +310,15 @@ export interface DefineProjectVariableInput {
 /**
  * Validates a variable's value against its data type, mirroring the
  * legacy per-type validate methods. String and Card values are
- * unvalidated (legacy parity); User values must reference an existing
- * user (Phase 4 tightens this to project team membership).
+ * unvalidated (legacy parity); User values must reference a member of
+ * the project's team (tightened from any-existing-user in Phase 4, as
+ * Phase 3 deferred).
  *
  * @returns an error message, or null when valid
  */
 function variableValueError(
   db: BetterSQLite3Database,
+  projectId: number,
   dataType: string,
   value: string,
 ): string | null {
@@ -294,12 +331,17 @@ function variableValueError(
       return "is an invalid date";
   }
   if (dataType === "UserType") {
-    const user = db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, Number(value)))
+    const membership = db
+      .select({ id: teamMemberships.id })
+      .from(teamMemberships)
+      .where(
+        and(
+          eq(teamMemberships.projectId, projectId),
+          eq(teamMemberships.userId, Number(value)),
+        ),
+      )
       .get();
-    if (!user) return "must select a team member";
+    if (!membership) return "must select a team member";
   }
   return null;
 }
@@ -309,11 +351,12 @@ function variableValueError(
  *
  * DOES: inserts a `project_variables` row and appends a
  * ProjectVariableDefined event.
- * REJECTS: unknown project, blank name, reserved name (legacy reserved
- * property values), name taken within the project, unknown data type,
- * a value wrapped in parentheses, or a value invalid for the data type
- * (non-numeric NumericType, unparseable DateType, unknown user for
- * UserType).
+ * REJECTS: unknown project, actor below project administrator for the
+ * project (legacy: variable changes are PROJECT_ADMIN), blank name,
+ * reserved name (legacy reserved property values), name taken within
+ * the project, unknown data type, a value wrapped in parentheses, or a
+ * value invalid for the data type (non-numeric NumericType, unparseable
+ * DateType, non-team-member for UserType).
  *
  * @returns the created variable row, or field errors
  */
@@ -327,6 +370,13 @@ export function defineProjectVariable(
     .where(eq(projects.id, input.projectId))
     .get();
   if (!project) return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.PROJECT_ADMIN,
+  );
+  if (denied) return denied;
 
   const name = input.name.trim();
   const value = input.value?.trim() || null;
@@ -351,7 +401,7 @@ export function defineProjectVariable(
   if (value) {
     if (value.startsWith("(") && value.endsWith(")"))
       return reject("value", "cannot both start with '(' and end with ')'");
-    const valueError = variableValueError(db, input.dataType, value);
+    const valueError = variableValueError(db, input.projectId, input.dataType, value);
     if (valueError) return reject("value", valueError);
   }
 

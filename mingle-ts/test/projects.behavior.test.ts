@@ -23,6 +23,7 @@ import { projects, projectVariables } from "../app/db/schema/projects";
 import { users } from "../app/db/schema/identity";
 import { domainEvents } from "../app/db/schema/events";
 import { registerUser } from "../app/domain/identity/commands.server";
+import { addTeamMember } from "../app/domain/identity/membership.server";
 import {
   createProject,
   defineProjectVariable,
@@ -73,6 +74,29 @@ function eventsOfType(type: string) {
     .from(domainEvents)
     .where(eq(domainEvents.type, type))
     .all();
+}
+
+/** Registers a later (hence non-admin) user for authorization tests. */
+function registerNonAdmin(login: string): number {
+  const result = registerUser(db, {
+    login,
+    name: login,
+    password: "card-wall-2010!",
+  });
+  if (!result.ok) throw new Error(`test registration failed for ${login}`);
+  return result.value.id;
+}
+
+/** Puts a user on the project's team with a role (actor: the admin). */
+function putOnTeam(projectId: number, userId: number, role: string) {
+  const result = addTeamMember(db, {
+    projectId,
+    userId,
+    role,
+    actorUserId: actorId,
+  });
+  if (!result.ok) throw new Error("test team setup failed");
+  db.delete(domainEvents).run(); // only events under test matter
 }
 
 function makeProject(name = "Card Wall", identifier?: string) {
@@ -380,15 +404,15 @@ describe("updateProjectSettings (UpdateProjectSettings → ProjectSettingsUpdate
   });
 });
 
-describe("defineProjectVariable (DefineProjectVariable → ProjectVariableDefined)", () => {
-  function variablesOf(projectId: number) {
-    return db
-      .select()
-      .from(projectVariables)
-      .where(eq(projectVariables.projectId, projectId))
-      .all();
-  }
+function variablesOf(projectId: number) {
+  return db
+    .select()
+    .from(projectVariables)
+    .where(eq(projectVariables.projectId, projectId))
+    .all();
+}
 
+describe("defineProjectVariable (DefineProjectVariable → ProjectVariableDefined)", () => {
   it("persists the variable row scoped to the project", () => {
     const project = makeProject();
     const result = defineProjectVariable(db, {
@@ -417,8 +441,9 @@ describe("defineProjectVariable (DefineProjectVariable → ProjectVariableDefine
     expect(variablesOf(project.id)[0].value).toBeNull();
   });
 
-  it("accepts a valid numeric, date, and user value", () => {
+  it("accepts a valid numeric, date, and team-member user value", () => {
     const project = makeProject();
+    putOnTeam(project.id, actorId, "full_member"); // UserType values must be team members (Phase 4)
     for (const [name, dataType, value] of [
       ["Velocity", "NumericType", "21.5"],
       ["Release Date", "DateType", "2026-09-01"],
@@ -590,6 +615,113 @@ describe("defineProjectVariable (DefineProjectVariable → ProjectVariableDefine
       "value",
       "must select a team member",
     );
+  });
+
+  it("rejects a user value naming a user who is not on the team (Phase 4)", () => {
+    const project = makeProject();
+    const bystanderId = registerNonAdmin("bystander");
+    expectDefineRejected(
+      project.id,
+      { name: "Owner", dataType: "UserType", value: String(bystanderId) },
+      "value",
+      "must select a team member",
+    );
+  });
+});
+
+describe("authorization checkpoint on project commands (Phase 4 retrofit)", () => {
+  const NEEDS_PROJECT_ADMIN =
+    "requires Project administrator access to this project";
+
+  it("rejects project creation by a non-site-admin, writing nothing", () => {
+    const plebId = registerNonAdmin("pleb");
+    const result = createProject(db, { name: "Rogue", actorUserId: plebId });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors.authorization).toContain(
+        "requires Mingle administrator access",
+      );
+    expect(reloadByIdentifier("rogue")).toBeUndefined();
+    expect(eventsOfType("ProjectCreated")).toHaveLength(0);
+  });
+
+  it("rejects a settings update by a readonly member with a specific authorization error", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    const readerId = registerNonAdmin("reader");
+    putOnTeam(project.id, readerId, "readonly_member");
+    const result = updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Hijacked",
+      identifier: "card_wall",
+      actorUserId: readerId,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors.authorization).toContain(NEEDS_PROJECT_ADMIN);
+    expect(reloadByIdentifier("card_wall")!.name).toBe("Card Wall");
+    expect(eventsOfType("ProjectSettingsUpdated")).toHaveLength(0);
+  });
+
+  it("rejects a settings update by a full member (updates are project-admin actions)", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    const devId = registerNonAdmin("dev");
+    putOnTeam(project.id, devId, "full_member");
+    const result = updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Hijacked",
+      identifier: "card_wall",
+      actorUserId: devId,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors.authorization).toContain(NEEDS_PROJECT_ADMIN);
+    expect(reloadByIdentifier("card_wall")!.name).toBe("Card Wall");
+  });
+
+  it("rejects a settings update by a non-member", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    const outsiderId = registerNonAdmin("outsider");
+    const result = updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Hijacked",
+      identifier: "card_wall",
+      actorUserId: outsiderId,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors.authorization).toContain(NEEDS_PROJECT_ADMIN);
+    expect(reloadByIdentifier("card_wall")!.name).toBe("Card Wall");
+  });
+
+  it("allows a settings update by a project_admin member who is not a site admin", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    const pmId = registerNonAdmin("pm");
+    putOnTeam(project.id, pmId, "project_admin");
+    const result = updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Renamed",
+      identifier: "card_wall",
+      actorUserId: pmId,
+    });
+    expect(result.ok).toBe(true);
+    expect(reloadByIdentifier("card_wall")!.name).toBe("Renamed");
+  });
+
+  it("rejects a variable definition by a readonly member, writing nothing", () => {
+    const project = makeProject();
+    const readerId = registerNonAdmin("reader");
+    putOnTeam(project.id, readerId, "readonly_member");
+    const result = defineProjectVariable(db, {
+      projectId: project.id,
+      name: "Current Release",
+      dataType: "StringType",
+      actorUserId: readerId,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors.authorization).toContain(NEEDS_PROJECT_ADMIN);
+    expect(variablesOf(project.id)).toHaveLength(0);
+    expect(eventsOfType("ProjectVariableDefined")).toHaveLength(0);
   });
 });
 
