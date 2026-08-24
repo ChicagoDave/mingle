@@ -14,4 +14,7 @@ export default [
   route("login", "routes/login.tsx"),
   route("logout", "routes/logout.ts"),
   route("profile", "routes/profile.tsx"),
+  route("projects", "routes/projects.tsx"),
+  route("projects/new", "routes/projects.new.tsx"),
+  route("projects/:identifier/settings", "routes/projects.settings.tsx"),
 ] satisfies RouteConfig;

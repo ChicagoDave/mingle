@@ -41,7 +41,7 @@
 - **Entry state**: Phase 2 auth exists; an authenticated user can act.
 - **Deliverable**: `projects` and `project_variables` schema/migrations; create/configure/settings routes for a project (name, identifier, description); command handlers `CreateProject`, `UpdateProjectSettings`, `DefineProjectVariable` each producing `ProjectCreated`/`ProjectSettingsUpdated`/`ProjectVariableDefined` or rejecting.
 - **Exit state**: a logged-in user creates a project, edits its settings, and defines a project variable; tests assert on the persisted `projects`/`project_variables` rows.
-- **Status**: CURRENT (since 2026-08-24)
+- **Status**: DONE (2026-08-24) — 37 behavioral tests passing against a real file-backed SQLite database with the real `drizzle/0001` migration (all DOES lines asserted on reloaded rows; all REJECTS WHEN lines covered, including the mutation-verification agent's flagged update-path gaps). Legacy parity harvested from `project.rb`/`identifiable.rb`/`project_variable.rb`: identifier format + generation-from-name, case-insensitive name uniqueness, reserved variable names, per-type value validation (User values checked against `users` until Phase 4 team membership exists). `CommandResult` lifted to a shared domain kernel (`app/domain/command.server.ts`) so Card Management doesn't import Identity & Access. End-to-end HTTP walk (scripted, not yet a standing test) against the rebuilt container verified create → settings → variable plus the `ProjectCreated`/`ProjectSettingsUpdated`/`ProjectVariableDefined` event trail in the container's database.
 
 ### Phase 4: Team membership, groups, and permissions
 - **Tier**: Medium

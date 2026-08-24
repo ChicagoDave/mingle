@@ -24,6 +24,37 @@
  */
 export type FieldErrors = Record<string, string[]>;
 
+/**
+ * Project variable data types (legacy ProjectVariable::DATA_TYPES).
+ * Crosses the wire in the define-variable form's type selector.
+ */
+export const PROJECT_VARIABLE_DATA_TYPES = [
+  "StringType",
+  "NumericType",
+  "UserType",
+  "DateType",
+  "CardType",
+] as const;
+
+/** One of PROJECT_VARIABLE_DATA_TYPES. */
+export type ProjectVariableDataType =
+  (typeof PROJECT_VARIABLE_DATA_TYPES)[number];
+
+/**
+ * Human labels for the data type selector (legacy
+ * ProjectVariable::DATA_TYPE_DESCRIPTIONS).
+ */
+export const PROJECT_VARIABLE_DATA_TYPE_LABELS: Record<
+  ProjectVariableDataType,
+  string
+> = {
+  StringType: "Text",
+  NumericType: "Numeric",
+  UserType: "Selected from team list",
+  DateType: "Date",
+  CardType: "Card",
+};
+
 /** Health probe response returned by GET /healthz. */
 export interface HealthzResponse {
   /** Overall service status: "ok" only when the database round-trip succeeded. */

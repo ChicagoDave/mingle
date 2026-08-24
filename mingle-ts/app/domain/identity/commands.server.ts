@@ -13,7 +13,8 @@
  *   ChangePassword      → PasswordChanged
  *
  * Public interface: `registerUser`, `authenticateUser`,
- * `updateUserProfile`, `changePassword`, `CommandResult`.
+ * `updateUserProfile`, `changePassword`. (`CommandResult` lives in
+ * ~/domain/command.server — the cross-context kernel.)
  *
  * Owner context: Identity & Access. Handlers take the Drizzle handle as
  * a parameter — this module holds no module-level infrastructure imports,
@@ -25,22 +26,13 @@
 import { eq, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { users, type UserRow } from "~/db/schema/identity";
-import type { FieldErrors } from "~/shared/wire-types";
+import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import { hashPassword, verifyPassword } from "~/domain/identity/password.server";
-
-/** Uniform command outcome: a value, or field-keyed rejection errors. */
-export type CommandResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: FieldErrors };
 
 // Legacy parity rules (mingle/app/models/user.rb):
 const LOGIN_FORMAT = /^[.+@_\w-]+$/;
 const EMAIL_FORMAT = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function reject<T>(field: string, message: string): CommandResult<T> {
-  return { ok: false, errors: { [field]: [message] } };
-}
 
 /**
  * Validates a candidate password against the legacy rules: 5–40 chars,
