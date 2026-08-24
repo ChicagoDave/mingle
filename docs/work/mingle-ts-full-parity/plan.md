@@ -21,7 +21,7 @@
 - **Entry state**: `mingle-ts/` does not exist; `mingle/` and `mingle-rails5/` remain untouched read-only reference material.
 - **Deliverable**: `mingle-ts/` React Router 7 (framework mode, SSR) skeleton on Node 22 LTS, TypeScript strict; Drizzle ORM wired to Postgres; `pg-boss` installed; one shared wire-types module (e.g. `mingle-ts/app/shared/wire-types.ts`) as the single client/server import point per rule 8b, with no runtime-specific types in it; `docker-compose.yml` with an `app` and a `db` (Postgres) service for local dev; a `/healthz` route that opens a real connection to `db`.
 - **Exit state**: `docker compose up` boots both services; a real-path test (rule 13a — this phase's name and content are database/docker-shaped) hits `/healthz` against the live `db` container and asserts a real round-trip, not a stub.
-- **Status**: CURRENT (since 2026-08-21)
+- **Status**: DONE (2026-08-24) — exit criteria met: compose stack boots (db healthy → app), real-path test passed 1/1 against live Postgres, degraded path (503 on db stop, 200 on recovery) verified. Note: scaffold landed on React Router v8 (current major of the framework-mode architecture ADR-0001 named as v7); Node 22 pinned in the Dockerfile, local dev runs Node 24.
 
 ### Phase 2: Identity & Access — users, authentication, profile
 - **Tier**: Medium
@@ -30,7 +30,7 @@
 - **Entry state**: Phase 1 scaffold boots against real Postgres.
 - **Deliverable**: `users` schema + migrations; login/logout routes and session handling (cookie-based, server-verified against a hashed password column — mirroring `login_access.rb`/`password_encryption.rb`'s intent, not their code); a profile settings route (display name, email, password change); domain events `UserRegistered`, `UserLoggedIn`, `UserProfileUpdated`, `PasswordChanged`.
 - **Exit state**: a behavioral test suite (rule 12/13) registers a user, logs in, changes profile fields, and reloads the DB to assert the persisted row — plus a rejection test for a bad password. No project or card concepts required yet.
-- **Status**: PENDING
+- **Status**: CURRENT (since 2026-08-24)
 
 ## Milestone 2: Projects & Team
 

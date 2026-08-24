@@ -1,0 +1,38 @@
+# mingle-ts local/dev stack (ADR-0001: one app container + Postgres).
+#
+# Usage:
+#   docker compose up            # boot db + app; app on http://localhost:3000
+#   docker compose up -d db      # db only, for `npm run dev` against localhost:5432
+#
+# The app service waits for the db healthcheck before starting, and the
+# app's own /healthz route proves a real SELECT round-trip end to end.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mingle
+      POSTGRES_PASSWORD: mingle
+      POSTGRES_DB: mingle
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mingle -d mingle"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://mingle:mingle@db:5432/mingle
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
