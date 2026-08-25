@@ -35,6 +35,7 @@ import {
   queryCardList,
   type CardListRow,
 } from "./list-view.server";
+import { type MqlEvaluationContext, todayIso } from "./mql-evaluator.server";
 
 /** Property kinds a grid view can group by (finite lane sets). */
 export const GRID_GROUPABLE_KINDS = ["enumerated", "user"] as const;
@@ -71,6 +72,8 @@ export interface CardGridView {
  * @param projectId - the project to project
  * @param groupByName - the group-by property's name; "" for ungrouped
  * @param filterStrings - raw `filters[]` values (legacy encoded form)
+ * @param mql - the advanced filter (legacy `filters[mql]`); replaces filterStrings
+ * @param context - what CURRENT USER / TODAY bind to when the MQL uses them
  * @returns the lane projection; render only when errors is empty
  */
 export function buildGridView(
@@ -78,8 +81,10 @@ export function buildGridView(
   projectId: number,
   groupByName: string,
   filterStrings: string[],
+  mql = "",
+  context: MqlEvaluationContext = { currentUserId: null, today: todayIso() },
 ): CardGridView {
-  const listView = buildCardListView(db, projectId, filterStrings, []);
+  const listView = buildCardListView(db, projectId, filterStrings, [], mql);
   const errors = [...listView.errors];
 
   let groupBy: PropertyDefinitionRow | undefined;
@@ -99,7 +104,10 @@ export function buildGridView(
   }
   if (errors.length > 0) return { lanes: [], errors };
 
-  const cards = queryCardList(db, projectId, listView.filters);
+  const cards = queryCardList(db, projectId, listView.filters, {
+    condition: listView.mqlCondition,
+    context,
+  });
 
   if (!groupBy) {
     return { lanes: [{ value: "", title: "", cards }], errors: [] };

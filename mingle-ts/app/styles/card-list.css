@@ -216,3 +216,26 @@ table.edit-table tbody tr.card-row:hover {
   cursor: pointer;
   text-decoration: none;
 }
+
+/* Phase 13 — advanced (MQL) filter section (legacy _mql_filter_tab.rhtml). */
+#filter-panel .mql-filter {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #ddd;
+}
+#filter-panel .mql-filter h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+#filter-panel .mql-filter code {
+  font-size: 12px;
+}
+#filter-panel .mql-filter textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: monospace;
+  font-size: 12px;
+}
+#filter-panel .mql-filter-actions {
+  margin-top: 6px;
+}

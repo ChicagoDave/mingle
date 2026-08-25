@@ -60,6 +60,8 @@ export interface FavoriteViewParams {
   columns: string[];
   /** Lane property name (grid style only; "" when ungrouped or list). */
   groupBy: string;
+  /** Advanced filter MQL (legacy `filters[mql]`); "" or absent when filtering simply. */
+  mql?: string;
 }
 
 export interface SaveFavoriteInput extends FavoriteViewParams {
@@ -148,21 +150,23 @@ function canonicalViewParams(
 ): CommandResult<FavoriteViewParams> {
   if (!(CARD_VIEW_STYLES as readonly string[]).includes(input.style))
     return reject("style", "is not a supported view style");
-  const filters = input.filters.map((f) => f.trim()).filter(Boolean);
+  const mql = (input.mql ?? "").trim();
+  // MQL replaces the simple filters (legacy MqlFilters is an alternative).
+  const filters = mql === "" ? input.filters.map((f) => f.trim()).filter(Boolean) : [];
   if (input.style === "grid") {
-    const view = buildGridView(db, projectId, input.groupBy.trim(), filters);
+    const view = buildGridView(db, projectId, input.groupBy.trim(), filters, mql);
     if (view.errors.length > 0) return { ok: false, errors: { view: view.errors } };
     return {
       ok: true,
-      value: { style: "grid", filters, columns: [], groupBy: view.groupBy?.name ?? "" },
+      value: { style: "grid", filters, columns: [], groupBy: view.groupBy?.name ?? "", mql },
     };
   }
   const columns = input.columns.map((c) => c.trim()).filter(Boolean);
-  const view = buildCardListView(db, projectId, filters, columns);
+  const view = buildCardListView(db, projectId, filters, columns, mql);
   if (view.errors.length > 0) return { ok: false, errors: { view: view.errors } };
   return {
     ok: true,
-    value: { style: "list", filters, columns: view.columns.map((c) => c.name), groupBy: "" },
+    value: { style: "list", filters, columns: view.columns.map((c) => c.name), groupBy: "", mql },
   };
 }
 
@@ -206,6 +210,7 @@ export function saveFavorite(
     filters: JSON.stringify(params.value.filters),
     columns: JSON.stringify(params.value.columns),
     groupBy: params.value.groupBy === "" ? null : params.value.groupBy,
+    mql: params.value.mql === "" ? null : params.value.mql,
   };
 
   return db.transaction((tx) => {
@@ -384,6 +389,7 @@ export function favoriteViewParams(favorite: FavoriteRow): FavoriteViewParams {
     filters: JSON.parse(favorite.filters) as string[],
     columns: JSON.parse(favorite.columns) as string[],
     groupBy: favorite.groupBy ?? "",
+    mql: favorite.mql ?? "",
   };
 }
 
@@ -399,6 +405,7 @@ export function favoriteHref(identifier: string, favorite: FavoriteRow): string 
   const params = favoriteViewParams(favorite);
   const search = new URLSearchParams();
   for (const filter of params.filters) search.append("filters[]", filter);
+  if (params.mql) search.set("filters[mql]", params.mql);
   if (params.style === "grid") {
     if (params.groupBy !== "") search.set("group_by", params.groupBy);
   } else if (params.columns.length > 0) {

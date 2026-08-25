@@ -60,6 +60,8 @@ export interface CurrentViewParams {
   filters: string[];
   columns: string[];
   groupBy: string;
+  /** Advanced filter MQL; "" or absent when filtering simply. */
+  mql?: string;
 }
 
 /** Sidebar section: team favorites, my favorites, save-current-view form. */
@@ -129,6 +131,9 @@ export function FavoritesPanel({
             {currentView.filters.map((f, i) => (
               <input key={i} type="hidden" name="filters[]" value={f} />
             ))}
+            {currentView.mql && (
+              <input type="hidden" name="filters[mql]" value={currentView.mql} />
+            )}
             {currentView.columns.length > 0 && (
               <input type="hidden" name="columns" value={currentView.columns.join(",")} />
             )}

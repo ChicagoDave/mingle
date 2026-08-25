@@ -14,7 +14,8 @@
  * favorite reopens to exactly the URL it was saved from: `filters` is
  * a JSON array of legacy-encoded `[Property][operator][value]`
  * strings, `columns` a JSON array of column names, `group_by` the
- * lane property name (grid style only).
+ * lane property name (grid style only), `mql` the advanced-filter
+ * text when the view filters by MQL instead (Phase 13).
  *
  * Public interface: `favorites` (Drizzle table), `FavoriteRow`.
  * Enforcement of the write rules lives in
@@ -53,6 +54,11 @@ export const favorites = sqliteTable(
     columns: text("columns").notNull().default("[]"),
     /** Lane property name (grid style); null when ungrouped or list. */
     groupBy: text("group_by"),
+    /**
+     * Advanced filter MQL text (legacy MqlFilters, `filters[mql]`);
+     * null when the view filters simply. When set, `filters` is `[]`.
+     */
+    mql: text("mql"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),

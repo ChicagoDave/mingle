@@ -57,6 +57,13 @@
       "when": 1787644477431,
       "tag": "0007_moaning_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787667996613,
+      "tag": "0008_needy_firestar",
+      "breakpoints": true
     }
   ]
 }

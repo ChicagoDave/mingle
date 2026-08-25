@@ -42,6 +42,7 @@ import {
   GRID_GROUPABLE_KINDS,
 } from "~/domain/cards/grid-view.server";
 import { setCardPropertyValue } from "~/domain/cards/properties.server";
+import { todayIso } from "~/domain/cards/mql-evaluator.server";
 import { listFavorites, serializeFavorite } from "~/domain/cards/favorites.server";
 import {
   PrivilegeLevel,
@@ -63,8 +64,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 
   const url = new URL(request.url);
   const groupByName = url.searchParams.get("group_by") ?? "";
-  const filterStrings = url.searchParams.getAll("filters[]");
-  const view = buildGridView(db, project.id, groupByName, filterStrings);
+  const mql = (url.searchParams.get("filters[mql]") ?? "").trim();
+  // MQL replaces the simple filters (legacy MqlFilters is an alternative).
+  const filterStrings = mql === "" ? url.searchParams.getAll("filters[]") : [];
+  const view = buildGridView(db, project.id, groupByName, filterStrings, mql, {
+    currentUserId: userId,
+    today: todayIso(),
+  });
 
   const groupable = db
     .select({ name: propertyDefinitions.name, kind: propertyDefinitions.kind })
@@ -91,6 +97,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     errors: view.errors,
     groupable,
     filterStrings,
+    mql,
   };
 }
 
@@ -219,6 +226,7 @@ export default function ProjectCardGrid() {
     errors,
     groupable,
     filterStrings,
+    mql,
     favorites,
     currentFavoriteId,
     canSaveFavorites,
@@ -259,9 +267,10 @@ export default function ProjectCardGrid() {
           <Link
             to={{
               pathname: `/projects/${project.identifier}/cards`,
-              search: new URLSearchParams(
-                filterStrings.map((f) => ["filters[]", f]),
-              ).toString(),
+              search: new URLSearchParams([
+                ...filterStrings.map((f) => ["filters[]", f]),
+                ...(mql !== "" ? [["filters[mql]", mql]] : []),
+              ]).toString(),
             }}
           >
             List
@@ -281,6 +290,7 @@ export default function ProjectCardGrid() {
           {filterStrings.map((f, i) => (
             <input key={i} type="hidden" name="filters[]" value={f} />
           ))}
+          {mql !== "" && <input type="hidden" name="filters[mql]" value={mql} />}
           <label>
             Group by{" "}
             <select name="group_by" defaultValue={groupByName}>
@@ -296,12 +306,29 @@ export default function ProjectCardGrid() {
             Apply
           </button>
         </Form>
+        <Form method="get" className="mql-filter" id="mql-filter-form">
+          {groupByName !== "" && <input type="hidden" name="group_by" value={groupByName} />}
+          <label>
+            Filter by MQL{" "}
+            <input
+              type="text"
+              name="filters[mql]"
+              id="mql_filter_edit_window"
+              defaultValue={mql}
+              placeholder="type = card AND size != 4"
+              size={48}
+            />
+          </label>{" "}
+          <button type="submit" className="link_as_button">
+            Apply filter
+          </button>
+        </Form>
         <FavoritesPanel
           identifier={project.identifier}
           team={favorites.team}
           personal={favorites.personal}
           currentFavoriteId={currentFavoriteId}
-          currentView={{ style: "grid", filters: filterStrings, columns: [], groupBy: groupBy?.name ?? "" }}
+          currentView={{ style: "grid", filters: filterStrings, columns: [], groupBy: groupBy?.name ?? "", mql }}
           canSave={canSaveFavorites}
         />
       </div>

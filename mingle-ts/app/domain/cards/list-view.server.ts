@@ -41,7 +41,14 @@ import {
   type FilterOperator,
   type PropertyKind,
 } from "~/shared/wire-types";
-import { compileFormula } from "./formula.server";
+import { comparisonKind } from "./property-compare.server";
+import type { MqlCondition } from "./mql.server";
+import { parseProjectMql } from "./mql-schema.server";
+import {
+  conditionUsesThisCard,
+  mqlCondition,
+  type MqlEvaluationContext,
+} from "./mql-evaluator.server";
 
 /**
  * The card type pseudo-property's display name (legacy
@@ -102,7 +109,20 @@ export interface CardListView {
   filters: CardListFilter[];
   /** Validation errors, legacy phrasing. Non-empty ⇒ do not run the query. */
   errors: string[];
+  /** The advanced (MQL) filter text as given; "" when filtering simply. */
+  mql: string;
+  /**
+   * The resolved MQL condition when `mql` is non-blank and valid; null
+   * otherwise. When set, `filters` is empty — MQL replaces the simple
+   * filters (legacy MqlFilters is an alternative to Filters, not an
+   * addition).
+   */
+  mqlCondition: MqlCondition | null;
 }
+
+/** Legacy MqlFilters#validation_errors wording for non-condition MQL. */
+const MQL_CONDITIONS_ONLY =
+  "MQL filters accept conditions only — remove SELECT, GROUP BY, ORDER BY, and AS OF.";
 
 /**
  * Decodes one legacy-encoded filter string.
@@ -145,38 +165,6 @@ function isIsoDate(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-/**
- * How a definition's stored values compare, for ordinal operators and
- * equality: "number" casts to REAL, "date"/"text" compare as text
- * (ISO dates lexically = chronologically; text case-insensitively),
- * "position" compares enumerated values by their defined order.
- */
-function comparisonKind(
-  db: BetterSQLite3Database,
-  definition: PropertyDefinitionRow,
-): "number" | "date" | "text" | "position" {
-  switch (definition.kind) {
-    case "number":
-      return "number";
-    case "date":
-      return "date";
-    case "enumerated":
-      return "position";
-    case "formula": {
-      // The compiled output kind decides how materialized values compare.
-      const inputs = db
-        .select()
-        .from(propertyDefinitions)
-        .where(eq(propertyDefinitions.projectId, definition.projectId))
-        .all()
-        .map((d) => ({ id: d.id, name: d.name, kind: d.kind }));
-      const compiled = compileFormula(definition.formula ?? "", inputs);
-      return compiled.ok && compiled.formula.outputKind === "date" ? "date" : "number";
-    }
-    default:
-      return "text";
-  }
-}
 
 /**
  * Validates decoded filters and column names against the project's
@@ -193,6 +181,8 @@ function comparisonKind(
  * @param projectId - the project whose definitions govern validation
  * @param filterStrings - raw `filters[]` values from the URL
  * @param columnNames - requested column names from the URL
+ * @param mql - the advanced filter (legacy `filters[mql]`); when non-blank
+ *   it is parsed against the project (Phase 12) and replaces filterStrings
  * @returns the validated view; run the query only when errors is empty
  */
 export function buildCardListView(
@@ -200,7 +190,28 @@ export function buildCardListView(
   projectId: number,
   filterStrings: string[],
   columnNames: string[],
+  mql = "",
 ): CardListView {
+  if (mql.trim() !== "") {
+    const view = buildCardListView(db, projectId, [], columnNames);
+    view.mql = mql;
+    const parsed = parseProjectMql(db, projectId, mql);
+    if (!parsed.ok) {
+      view.errors.push(...parsed.errors);
+      return view;
+    }
+    const { query } = parsed;
+    if (query.select || query.groupBy || query.orderBy || query.asOf !== null) {
+      view.errors.push(MQL_CONDITIONS_ONLY);
+      return view;
+    }
+    if (query.where && conditionUsesThisCard(query.where)) {
+      view.errors.push("THIS CARD is not supported in MQL filters.");
+      return view;
+    }
+    view.mqlCondition = query.where;
+    return view;
+  }
   const definitions = db
     .select()
     .from(propertyDefinitions)
@@ -321,7 +332,7 @@ export function buildCardListView(
     }
   }
 
-  return { columns, filters, errors };
+  return { columns, filters, errors, mql: "", mqlCondition: null };
 }
 
 /** SQL for "a value row exists for this card × definition matching cmp". */
@@ -438,12 +449,15 @@ export interface CardListRow {
  * @param db - Drizzle handle
  * @param projectId - the project to list
  * @param filters - validated filters from buildCardListView
+ * @param mql - the view's resolved MQL condition (if any) and the
+ *   context CURRENT USER / TODAY bind to; ANDed with the simple filters
  * @returns matching cards ordered by number descending
  */
 export function queryCardList(
   db: BetterSQLite3Database,
   projectId: number,
   filters: CardListFilter[],
+  mql?: { condition: MqlCondition | null; context: MqlEvaluationContext },
 ): CardListRow[] {
   const groups = new Map<string, CardListFilter[]>();
   for (const filter of filters) {
@@ -467,6 +481,9 @@ export function queryCardList(
         ? or(individualOr, collectiveAnd)!
         : (individualOr ?? collectiveAnd)!;
     groupConditions.push(condition);
+  }
+  if (mql?.condition) {
+    groupConditions.push(mqlCondition(db, projectId, mql.condition, mql.context));
   }
 
   return db

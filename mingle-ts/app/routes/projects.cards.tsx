@@ -2,8 +2,10 @@
  * /projects/:identifier/cards — the project's card list (Phase 9).
  *
  * Purpose: the card list view — a results table with selectable
- * property columns and simple property filters (equality and range;
- * MQL filtering arrives in Phase 13). Layout harvested from the legacy
+ * property columns and either simple property filters (equality and
+ * range) or, since Phase 13, an advanced MQL filter carried in the
+ * legacy `filters[mql]` parameter (MqlFilters#to_params) that replaces
+ * the simple filters when present. Layout harvested from the legacy
  * _card_list_results.rhtml (#content, table.edit-table, .cards-header,
  * tr.table-column-header, td.number/.card-name), _column_selector.rhtml
  * (Add / remove columns dropdown), and the interactive filter tab
@@ -40,6 +42,7 @@ import {
   parseFilterString,
   queryCardList,
 } from "~/domain/cards/list-view.server";
+import { todayIso } from "~/domain/cards/mql-evaluator.server";
 import {
   favoriteHref,
   findFavoriteByName,
@@ -58,10 +61,11 @@ import {
 } from "~/shared/wire-types";
 import "../styles/card-list.css";
 
-/** Rebuilds the canonical list URL from filters[] and columns. */
-function listSearch(filterStrings: string[], columnNames: string[]): string {
+/** Rebuilds the canonical list URL from filters[] / filters[mql] and columns. */
+function listSearch(filterStrings: string[], columnNames: string[], mql = ""): string {
   const params = new URLSearchParams();
   for (const filter of filterStrings) params.append("filters[]", filter);
+  if (mql !== "") params.set("filters[mql]", mql);
   if (columnNames.length > 0) params.set("columns", columnNames.join(","));
   const search = params.toString();
   return search ? `?${search}` : "";
@@ -98,11 +102,21 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       ? columnsParam.split(",").map((c) => c.trim()).filter(Boolean)
       : [];
 
+  const mql = (url.searchParams.get("filters[mql]") ?? "").trim();
+
   // Canonicalize a column-selector submission (col checkboxes).
   if (url.searchParams.has("apply-columns")) {
     const filters = url.searchParams.getAll("filters[]");
     throw redirect(
-      `/projects/${project.identifier}/cards${listSearch(filters, url.searchParams.getAll("col"))}`,
+      `/projects/${project.identifier}/cards${listSearch(filters, url.searchParams.getAll("col"), mql)}`,
+    );
+  }
+
+  // Canonicalize an MQL-filter submission: MQL replaces simple filters
+  // (legacy: the MQL filter tab is an alternative to the filter widget).
+  if (url.searchParams.has("apply-mql")) {
+    throw redirect(
+      `/projects/${project.identifier}/cards${listSearch([], columnNames, mql)}`,
     );
   }
 
@@ -120,11 +134,16 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     );
   }
 
-  const filterStrings = url.searchParams.getAll("filters[]");
-  const view = buildCardListView(db, project.id, filterStrings, columnNames);
+  const filterStrings = mql === "" ? url.searchParams.getAll("filters[]") : [];
+  const view = buildCardListView(db, project.id, filterStrings, columnNames, mql);
   columnNames = view.columns.map((c) => c.name);
   const rows =
-    view.errors.length > 0 ? [] : queryCardList(db, project.id, view.filters);
+    view.errors.length > 0
+      ? []
+      : queryCardList(db, project.id, view.filters, {
+          condition: view.mqlCondition,
+          context: { currentUserId: userId, today: todayIso() },
+        });
 
   // Everything the widgets offer: definitions (with enum values), team
   // members for user-kind selects, and card type names.
@@ -234,6 +253,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       (f) => parseFilterString(f) ?? { propertyName: "", operator: "is", value: "" },
     ),
     filterStrings,
+    mql,
     columnNames,
     options: {
       properties: definitions.map((d) => ({
@@ -335,6 +355,7 @@ export default function ProjectCards() {
     filterRows,
     errors,
     filterStrings,
+    mql,
     columnNames,
     options,
     favorites,
@@ -365,9 +386,10 @@ export default function ProjectCards() {
           <Link
             to={{
               pathname: `${base}/grid`,
-              search: new URLSearchParams(
-                filterStrings.map((f) => ["filters[]", f]),
-              ).toString(),
+              search: new URLSearchParams([
+                ...filterStrings.map((f) => ["filters[]", f]),
+                ...(mql !== "" ? [["filters[mql]", mql]] : []),
+              ]).toString(),
             }}
           >
             Grid
@@ -395,6 +417,7 @@ export default function ProjectCards() {
                         {filterStrings.map((f, i) => (
                           <input key={i} type="hidden" name="filters[]" value={f} />
                         ))}
+                        {mql !== "" && <input type="hidden" name="filters[mql]" value={mql} />}
                         <ul id="options-container">
                           {[CARD_TYPE_COLUMN_NAME, ...options.properties.map((p) => p.name)].map(
                             (name) => (
@@ -472,9 +495,16 @@ export default function ProjectCards() {
               ))}
             </ul>
           )}
-          <p id="filter-and-or" className="text-light">
-            Show cards where:
-          </p>
+          {mql !== "" ? (
+            <p id="filter-and-or" className="text-light">
+              Filtering by MQL. Clear the MQL filter to use the simple filters.
+            </p>
+          ) : (
+            <p id="filter-and-or" className="text-light">
+              Show cards where:
+            </p>
+          )}
+          {mql === "" && (
           <Form method="get" action={base} id="filter-widget">
             {columnNames.length > 0 && (
               <input type="hidden" name="columns" value={columnNames.join(",")} />
@@ -506,12 +536,40 @@ export default function ProjectCards() {
               </button>
             </div>
           </Form>
+          )}
+          <section id="mql-filter" className="mql-filter">
+            <h3>Filter by MQL</h3>
+            <p className="text-light">
+              Using MQL conditions in filter. For example:{" "}
+              <code>type = card AND size != 4</code>.
+            </p>
+            <Form method="get" action={base} id="mql-filter-form">
+              {columnNames.length > 0 && (
+                <input type="hidden" name="columns" value={columnNames.join(",")} />
+              )}
+              <textarea
+                name="filters[mql]"
+                id="mql_filter_edit_window"
+                rows={6}
+                defaultValue={mql}
+                aria-label="MQL filter"
+              />
+              <div className="mql-filter-actions">
+                <button type="submit" name="apply-mql" value="1" className="link_as_button">
+                  Apply filter
+                </button>{" "}
+                {mql !== "" && (
+                  <Link to={`${base}${listSearch([], columnNames)}`}>Clear</Link>
+                )}
+              </div>
+            </Form>
+          </section>
           <FavoritesPanel
             identifier={project.identifier}
             team={favorites.team}
             personal={favorites.personal}
             currentFavoriteId={currentFavoriteId}
-            currentView={{ style: "list", filters: filterStrings, columns: columnNames, groupBy: "" }}
+            currentView={{ style: "list", filters: filterStrings, columns: columnNames, groupBy: "", mql }}
             canSave={canSaveFavorites}
           />
         </aside>

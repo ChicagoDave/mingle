@@ -86,6 +86,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       filters: form.getAll("filters[]").map(String),
       columns: columnsField === "" ? [] : columnsField.split(","),
       groupBy: String(form.get("group_by") ?? ""),
+      mql: String(form.get("filters[mql]") ?? ""),
       personal: form.get("personal") !== null,
       actorUserId: userId,
     });
