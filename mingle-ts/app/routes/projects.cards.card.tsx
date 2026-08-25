@@ -8,8 +8,12 @@
  * bytes then runs AddCardAttachment (deleting the bytes again on
  * rejection), "remove-attachment" runs RemoveCardAttachment then
  * deletes the bytes, "checklist-add"/"checklist-mark"/
- * "checklist-remove" run the checklist commands, and "set-property"
- * runs SetCardPropertyValue (blank value clears). The append-only
+ * "checklist-remove" run the checklist commands, "set-property"
+ * runs SetCardPropertyValue (blank value clears), and "transition" runs
+ * ExecuteTransition with `input[<definitionId>]` fields for the
+ * transition's user-input actions (Phase 14; the loader offers only the
+ * transitions available to this card and user, legacy
+ * _card_transitions_button). The append-only
  * version trail renders newest-first with each version's property
  * snapshot. Authorization is enforced by the
  * command handlers; the route surfaces rejections. Requires a
@@ -38,6 +42,10 @@ import { teamMemberships } from "~/db/schema/membership";
 import { deleteCard, updateCard } from "~/domain/cards/commands.server";
 import { setCardPropertyValue } from "~/domain/cards/properties.server";
 import {
+  availableTransitions,
+  executeTransition,
+} from "~/domain/cards/transitions.server";
+import {
   addCardAttachment,
   removeCardAttachment,
 } from "~/domain/cards/attachments.server";
@@ -55,7 +63,7 @@ import { requireUserId } from "~/auth/session.server";
 
 /** Loads the card, its project's card types, and its version trail (newest first). */
 export async function loader({ request, params }: Route.LoaderArgs) {
-  await requireUserId(request);
+  const userId = await requireUserId(request);
   const project = db
     .select()
     .from(projects)
@@ -188,6 +196,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     checklist,
     properties,
     teamMembers,
+    transitions: availableTransitions(db, project.id, card.number, userId),
   };
 }
 
@@ -314,6 +323,23 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: true as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "transition") {
+    const userInput: Record<string, string> = {};
+    for (const [key, raw] of form.entries()) {
+      const match = /^input\[(\d+)\]$/.exec(key);
+      if (match) userInput[match[1]] = String(raw);
+    }
+    const result = executeTransition(db, {
+      projectId: project.id,
+      cardNumber,
+      transitionId: Number(form.get("transitionId") ?? 0),
+      userInput,
+      actorUserId,
+    });
+    return result.ok
+      ? { saved: true as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
@@ -328,6 +354,7 @@ export default function CardPage() {
     checklist,
     properties,
     teamMembers,
+    transitions,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
@@ -345,6 +372,51 @@ export default function CardPage() {
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
       <ErrorLines field="authorization" errors={errors} />
       <ErrorLines field="card" errors={errors} />
+
+      {transitions.length > 0 ? (
+        <section>
+          <h2>Transitions</h2>
+          <ErrorLines field="transition" errors={errors} />
+          {transitions.map((transition) => (
+            <Form method="post" key={transition.id} style={{ marginBottom: "0.5rem" }}>
+              <input type="hidden" name="intent" value="transition" />
+              <input type="hidden" name="transitionId" value={transition.id} />
+              {transition.inputs.map((input) => (
+                <label key={input.propertyDefinitionId} style={{ marginRight: "0.5rem" }}>
+                  {input.propertyName}
+                  {input.required ? " *" : ""}{" "}
+                  {input.kind === "enumerated" ? (
+                    <select name={`input[${input.propertyDefinitionId}]`} defaultValue="">
+                      <option value="">{input.required ? "" : "(no change)"}</option>
+                      {(properties.find((p) => p.id === input.propertyDefinitionId)
+                        ?.allowedValues ?? []).map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  ) : input.kind === "user" ? (
+                    <select name={`input[${input.propertyDefinitionId}]`} defaultValue="">
+                      <option value="">{input.required ? "" : "(no change)"}</option>
+                      {teamMembers.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      name={`input[${input.propertyDefinitionId}]`}
+                      type={input.kind === "date" ? "date" : "text"}
+                    />
+                  )}
+                </label>
+              ))}
+              <button type="submit">{transition.name}</button>
+            </Form>
+          ))}
+        </section>
+      ) : null}
 
       <h2>Edit</h2>
       <Form method="post">

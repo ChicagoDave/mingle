@@ -24,7 +24,13 @@
  *
  * Public interface: `definePropertyDefinition`, `setCardPropertyValue`,
  * `cardPropertySnapshot` (read helper reused by the card commands'
- * version inserts).
+ * version inserts), and — for sibling Card Management commands that
+ * set several properties in ONE card version (transitions.server.ts) —
+ * `canonicalPropertyValue`, `samePropertyValue`, and
+ * `appendPropertyValueChanges`. Those three keep this module the only
+ * writer of `card_property_values`: callers validate through
+ * `canonicalPropertyValue`, then hand the changes to
+ * `appendPropertyValueChanges` inside their own transaction.
  *
  * Owner context: Card Management. Handlers take the Drizzle handle as a
  * parameter — no module-level infrastructure imports; tests supply
@@ -381,7 +387,21 @@ export function definePropertyDefinition(
  *
  * @returns the canonical stored value, or a rejection
  */
-function canonicalValue(
+/**
+ * Validates a raw (non-blank, trimmed) value against a property
+ * definition's kind and returns its canonical stored form — numbers as
+ * the validated numeric string, dates as ISO yyyy-mm-dd, users as the
+ * member's id, enumerated values in their defined casing. Never
+ * coerces: an invalid value is a rejection keyed on "value" naming the
+ * property.
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the project (user values must be team members)
+ * @param definition - the property definition the value is for
+ * @param raw - the trimmed, non-empty input value
+ * @returns the canonical stored value, or field errors
+ */
+export function canonicalPropertyValue(
   db: BetterSQLite3Database,
   projectId: number,
   definition: PropertyDefinitionRow,
@@ -389,7 +409,8 @@ function canonicalValue(
 ): CommandResult<string> {
   switch (definition.kind as PropertyKind) {
     case "formula":
-      // unreachable: setCardPropertyValue rejects formula kinds first
+      // Callers reject formula kinds before validating a value; kept as
+      // a guard so a formula can never be given a stored value.
       return reject(
         "property",
         `${definition.name} is a formula property and cannot be set directly`,
@@ -483,8 +504,17 @@ function canonicalValue(
   }
 }
 
-/** True when new and current stored values are the same property value. */
-function sameValue(
+/**
+ * True when a new and a current stored value are the same property value
+ * for the kind — numbers compare numerically ("5" and "5.0" are one
+ * value, legacy NumericType ObjectComparator), everything else exactly;
+ * null means unset.
+ *
+ * @param kind - the property's kind
+ * @param next - the proposed canonical value, null to clear
+ * @param current - the stored canonical value, null when unset
+ */
+export function samePropertyValue(
   kind: PropertyKind,
   next: string | null,
   current: string | null,
@@ -564,7 +594,7 @@ export function setCardPropertyValue(
   const raw = input.value?.trim() || null;
   let canonical: string | null = null;
   if (raw !== null) {
-    const result = canonicalValue(db, input.projectId, definition, raw);
+    const result = canonicalPropertyValue(db, input.projectId, definition, raw);
     if (!result.ok) return result;
     canonical = result.value;
   }
@@ -580,60 +610,17 @@ export function setCardPropertyValue(
     )
     .get();
   const current = currentRow?.value ?? null;
-  if (sameValue(definition.kind as PropertyKind, canonical, current))
+  if (samePropertyValue(definition.kind as PropertyKind, canonical, current))
     return reject("card", "has no changes to save");
 
-  const cardType = db
-    .select({ name: cardTypes.name })
-    .from(cardTypes)
-    .where(eq(cardTypes.id, card.cardTypeId))
-    .get();
-
   return db.transaction((tx) => {
-    if (canonical === null) {
-      tx.delete(cardPropertyValues)
-        .where(eq(cardPropertyValues.id, currentRow!.id))
-        .run();
-    } else if (currentRow) {
-      tx.update(cardPropertyValues)
-        .set({ value: canonical, updatedAt: new Date() })
-        .where(eq(cardPropertyValues.id, currentRow.id))
-        .run();
-    } else {
-      tx.insert(cardPropertyValues)
-        .values({
-          cardId: card.id,
-          propertyDefinitionId: definition.id,
-          value: canonical,
-        })
-        .run();
-    }
-    recomputeCardFormulas(tx, input.projectId, card.id);
-    const nextVersion = card.version + 1;
-    const row = tx
-      .update(cards)
-      .set({
-        version: nextVersion,
-        modifiedByUserId: input.actorUserId,
-        updatedAt: new Date(),
-      })
-      .where(eq(cards.id, card.id))
-      .returning()
-      .get();
-    tx.insert(cardVersions)
-      .values({
-        cardId: card.id,
-        projectId: input.projectId,
-        number: card.number,
-        version: nextVersion,
-        name: card.name,
-        description: card.description,
-        cardTypeName: cardType?.name ?? "",
-        propertyValues: JSON.stringify(cardPropertySnapshot(tx, card.id)),
-        createdByUserId: card.createdByUserId,
-        modifiedByUserId: input.actorUserId,
-      })
-      .run();
+    const row = appendPropertyValueChanges(
+      tx,
+      input.projectId,
+      card,
+      [{ definition, value: canonical }],
+      input.actorUserId,
+    );
     emitEvent(tx, {
       type: "CardPropertyValueSet",
       aggregateType: "Card",
@@ -648,4 +635,98 @@ export function setCardPropertyValue(
     });
     return { ok: true, value: row } as CommandResult<CardRow>;
   });
+}
+
+/** One property value change to apply: the canonical value, or null to clear. */
+export interface PropertyValueChange {
+  definition: PropertyDefinitionRow;
+  value: string | null;
+}
+
+/**
+ * Applies a set of already-validated property value changes to a card as
+ * ONE new card version, inside the caller's transaction: upserts (or
+ * deletes, when clearing) each `card_property_values` row, recomputes
+ * the project's formula properties for the card, bumps the `cards`
+ * row's version and modified stamps, and inserts the next
+ * `card_versions` row with the full property snapshot. Emits no event —
+ * the calling command emits its own, so the trail names the command
+ * that caused the version (CardPropertyValueSet, TransitionExecuted).
+ *
+ * Callers must have validated every value through
+ * `canonicalPropertyValue` and dropped no-op changes with
+ * `samePropertyValue`; this function trusts its input and always
+ * appends a version.
+ *
+ * @param tx - the transaction the surrounding command is using
+ * @param projectId - the card's project
+ * @param card - the card row as loaded before the change
+ * @param changes - the canonical changes, at most one per definition
+ * @param actorUserId - the user recorded as the version's modifier
+ * @returns the updated card row
+ */
+export function appendPropertyValueChanges(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  card: CardRow,
+  changes: PropertyValueChange[],
+  actorUserId: number,
+): CardRow {
+  const currentRows = tx
+    .select()
+    .from(cardPropertyValues)
+    .where(eq(cardPropertyValues.cardId, card.id))
+    .all();
+  for (const { definition, value } of changes) {
+    const currentRow = currentRows.find(
+      (row) => row.propertyDefinitionId === definition.id,
+    );
+    if (value === null) {
+      if (currentRow)
+        tx.delete(cardPropertyValues)
+          .where(eq(cardPropertyValues.id, currentRow.id))
+          .run();
+    } else if (currentRow) {
+      tx.update(cardPropertyValues)
+        .set({ value, updatedAt: new Date() })
+        .where(eq(cardPropertyValues.id, currentRow.id))
+        .run();
+    } else {
+      tx.insert(cardPropertyValues)
+        .values({ cardId: card.id, propertyDefinitionId: definition.id, value })
+        .run();
+    }
+  }
+  recomputeCardFormulas(tx, projectId, card.id);
+  const cardType = tx
+    .select({ name: cardTypes.name })
+    .from(cardTypes)
+    .where(eq(cardTypes.id, card.cardTypeId))
+    .get();
+  const nextVersion = card.version + 1;
+  const row = tx
+    .update(cards)
+    .set({
+      version: nextVersion,
+      modifiedByUserId: actorUserId,
+      updatedAt: new Date(),
+    })
+    .where(eq(cards.id, card.id))
+    .returning()
+    .get();
+  tx.insert(cardVersions)
+    .values({
+      cardId: card.id,
+      projectId,
+      number: card.number,
+      version: nextVersion,
+      name: card.name,
+      description: card.description,
+      cardTypeName: cardType?.name ?? "",
+      propertyValues: JSON.stringify(cardPropertySnapshot(tx, card.id)),
+      createdByUserId: card.createdByUserId,
+      modifiedByUserId: actorUserId,
+    })
+    .run();
+  return row;
 }

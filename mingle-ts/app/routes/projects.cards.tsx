@@ -382,6 +382,7 @@ export default function ProjectCards() {
         <p>
           <Link to="/projects">All projects</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
+          <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/team`}>Team</Link> ·{" "}
           <Link
             to={{

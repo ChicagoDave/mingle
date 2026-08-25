@@ -113,6 +113,55 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
 };
 
 /**
+ * Transition prerequisite kinds (Phase 14) — legacy TransitionPrerequisite
+ * STI classes HasSpecificValue | HasSetValue | IsUser | InGroup as a
+ * discriminator. Crosses the wire in the define-transition form's
+ * "requires" selectors and the stored `transition_prerequisites.kind`.
+ */
+export const TRANSITION_PREREQUISITE_KINDS = [
+  "has_specific_value",
+  "has_set_value",
+  "is_user",
+  "in_group",
+] as const;
+
+/** One of TRANSITION_PREREQUISITE_KINDS. */
+export type TransitionPrerequisiteKind =
+  (typeof TRANSITION_PREREQUISITE_KINDS)[number];
+
+/**
+ * Transition action input modes (Phase 14) — whether an action sets a
+ * fixed value or takes it from the executing user (legacy special
+ * values "(user input - required)" / "(user input - optional)").
+ * Crosses the wire in the define-transition form's "sets" selectors,
+ * the stored `transition_actions.input_mode`, and the card page's
+ * transition forms (which render an input per user-input action).
+ */
+export const TRANSITION_ACTION_INPUT_MODES = [
+  "fixed",
+  "user_input_required",
+  "user_input_optional",
+] as const;
+
+/** One of TRANSITION_ACTION_INPUT_MODES. */
+export type TransitionActionInputMode =
+  (typeof TRANSITION_ACTION_INPUT_MODES)[number];
+
+/**
+ * The legacy special values the define-transition form posts in a
+ * property's "requires"/"sets" field in place of a real value
+ * (transition.rb USER_INPUT_* constants and PropertyValue's SET /
+ * NOT_SET display values). Anything else posted is a literal value; an
+ * empty string means "no requirement" / "no action" for that property.
+ */
+export const TRANSITION_SPECIAL_VALUES = {
+  SET: "(set)",
+  NOT_SET: "(not set)",
+  USER_INPUT_REQUIRED: "(user input - required)",
+  USER_INPUT_OPTIONAL: "(user input - optional)",
+} as const;
+
+/**
  * Saved card view styles (Phase 11) — which view a favorite reopens
  * into. Crosses the wire in the save-favorite form's hidden `style`
  * field and the favorite's stored `style` column (legacy
