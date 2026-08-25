@@ -1,0 +1,153 @@
+/**
+ * Card grid ("card wall") styles (Phase 10) — harvested from the
+ * legacy mingle/app/assets/stylesheets/grid_view.scss: .swimming-pool
+ * fixed-layout table (#f3f3f3 cells with 5px white borders, #FAFAFA
+ * lane headers padded 15px 5px), golden-ratio white .card-icon
+ * mini-cards with drop shadow and the gradient top strip, and
+ * .grid-results horizontal scrolling. Class names match the legacy
+ * markup (_group_lanes.rhtml / _card_div.rhtml).
+ *
+ * Owner context: Card Management (presentation).
+ */
+
+.grid-results {
+  overflow-x: auto;
+  padding: 16px;
+}
+
+table.swimming-pool {
+  table-layout: fixed;
+  width: 100%;
+  min-height: 400px;
+  margin: 0;
+  border-spacing: 0;
+  border: none;
+  border-collapse: separate;
+  vertical-align: top;
+}
+
+.swimming-pool thead th.lane_header {
+  background-color: #fafafa;
+  border: 5px solid #fff;
+  border-top: none;
+  padding: 15px 5px;
+  text-align: center;
+  vertical-align: middle;
+  font-weight: bold;
+  font-size: 11px;
+  user-select: none;
+}
+
+.swimming-pool th .header-title {
+  display: inline;
+  overflow-wrap: break-word;
+  font-size: 13px;
+}
+
+.swimming-pool th .lane-card-number {
+  font-weight: normal;
+  padding: 0 5px;
+  display: inline-block;
+}
+
+.swimming-pool tbody td.cell {
+  background-color: #f3f3f3;
+  border: 5px solid #fff;
+  border-bottom: 0;
+  padding: 5px;
+  vertical-align: top;
+  min-height: 66px;
+  height: 66px;
+}
+
+.swimming-pool td.cell.cell-highlighted {
+  background-color: #cee7ed;
+}
+
+/* mini card (legacy .card-icon + .card-inner-wrapper) */
+.card-icon {
+  position: relative;
+  float: left;
+  cursor: move;
+  margin: 4px;
+  background-color: #fff;
+  border: none;
+  color: #333;
+  user-select: none;
+  box-shadow: 1px 1px 2px 0 rgba(50, 50, 50, 0.36);
+  width: calc(95% - 10px);
+  min-width: 90px;
+  max-width: 200px;
+  touch-action: none;
+}
+
+/* golden-ratio height via padding (legacy trick) */
+.card-icon::before {
+  float: left;
+  content: "";
+  width: 0;
+  height: 0;
+  padding-bottom: 61.803398875%;
+}
+
+/* the gradient identity strip along the card top */
+.card-icon::after {
+  content: "";
+  clear: both;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  opacity: 0.5;
+  background-image: linear-gradient(45deg, #cee83a, #3afe6d);
+}
+
+.card-icon.dragging {
+  opacity: 0.85;
+  z-index: 20;
+}
+
+.card-inner-wrapper {
+  overflow: hidden;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 6px;
+  font-size: 11px;
+}
+
+.card-summary-number a {
+  color: #049;
+  text-decoration: none;
+  font-weight: bold;
+}
+
+.card-icon .card-name {
+  margin-top: 2px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+/* grid toolbar (legacy .grid-actions strip) */
+.grid-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 8px;
+  font-size: 13px;
+}
+
+.grid-actions select {
+  font-size: 12px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
+.grid-errors {
+  color: #c00;
+  padding: 0 16px;
+}

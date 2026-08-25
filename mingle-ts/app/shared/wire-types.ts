@@ -112,6 +112,61 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
   formula: "Formula",
 };
 
+/**
+ * Card list filter operators (Phase 9) — the operator vocabulary of the
+ * legacy interactive filters (operator.rb names as serialized by
+ * filters.rb's encoded form). These are the values that cross the wire
+ * in the `filters[]` query parameter and the filter form's operator
+ * selector. Date properties *display* "is less than" as "is before"
+ * and "is greater than" as "is after" (legacy Operator date_name), but
+ * the encoded parameter always carries the canonical name below.
+ */
+export const FILTER_OPERATORS = [
+  "is",
+  "is not",
+  "is less than",
+  "is greater than",
+] as const;
+
+/** One of FILTER_OPERATORS. */
+export type FilterOperator = (typeof FILTER_OPERATORS)[number];
+
+/**
+ * The operators a filter on the given column offers (legacy
+ * available_operators): equality only for text and user properties and
+ * the card type pseudo-property; equality plus ordinals for number,
+ * date, enumerated (ordered by defined position), and formula.
+ *
+ * @param kind - a PropertyKind, or "type" for the card type column
+ * @returns the offered operators, in legacy menu order
+ */
+export function filterOperatorsFor(
+  kind: PropertyKind | "type",
+): readonly FilterOperator[] {
+  if (kind === "type" || kind === "text" || kind === "user") {
+    return ["is", "is not"];
+  }
+  return FILTER_OPERATORS;
+}
+
+/**
+ * Display name for an operator on a given column (legacy
+ * Operator.date_name): date properties read "is before"/"is after".
+ *
+ * @param operator - the canonical operator
+ * @param isDate - whether the filtered property is date-valued
+ * @returns the label to show in the operator selector
+ */
+export function filterOperatorLabel(
+  operator: FilterOperator,
+  isDate: boolean,
+): string {
+  if (!isDate) return operator;
+  if (operator === "is less than") return "is before";
+  if (operator === "is greater than") return "is after";
+  return operator;
+}
+
 /** Health probe response returned by GET /healthz. */
 export interface HealthzResponse {
   /** Overall service status: "ok" only when the database round-trip succeeded. */

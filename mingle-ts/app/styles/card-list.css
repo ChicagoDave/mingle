@@ -1,0 +1,218 @@
+/**
+ * Card list view styles (Phase 9) — harvested from the legacy Mingle
+ * stylesheets: mingle/app/assets/stylesheets/base.scss (table borders,
+ * th styling, td.number, selected-row color) and cards.scss
+ * (.cards-header, tr.table-column-header, .view_controls, card-name
+ * link treatment). Class names are kept identical to the legacy
+ * markup (_card_list_results.rhtml) so the layout reads as its legacy
+ * counterpart; image-based gradients are approximated with flat/linear
+ * CSS colors.
+ *
+ * Owner context: Card Management (presentation).
+ */
+
+#card-list-page {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px;
+  font-size: 13px;
+}
+
+#card-list-page #content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- results table (base.scss + cards.scss) --- */
+
+table.edit-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+table.edit-table th,
+table.edit-table td {
+  border: 1px solid #ccc;
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+table.edit-table th {
+  background: #fff;
+  font-weight: bold;
+}
+
+/* header band above the column headers */
+table.edit-table .cards-header {
+  background: #eee linear-gradient(to bottom, #f4f4f4, #e6e6e6);
+}
+
+table.edit-table .cards-header td {
+  border-top: 0;
+  padding: 10px;
+  background-color: #eee;
+}
+
+.cards-header .view_controls {
+  float: right;
+  padding: 0;
+}
+
+.view_controls a,
+.view_controls a:visited,
+.view_controls a:hover,
+.view_controls summary {
+  color: #000;
+  cursor: pointer;
+}
+
+.card_count {
+  color: #333;
+}
+
+/* sortable column header row */
+tr.table-column-header {
+  background: #eee linear-gradient(to bottom, #f6f6f6, #e2e2e2);
+}
+
+tr.table-column-header th {
+  padding: 7px 10px;
+  color: #000;
+  font-weight: bold;
+}
+
+/* body rows */
+table.edit-table td.number,
+table.edit-table th.number {
+  text-align: center;
+  font-weight: bold;
+  width: 2%;
+  white-space: nowrap;
+}
+
+table.edit-table tbody a,
+table.edit-table tbody a:visited,
+table.edit-table tbody a:hover {
+  text-decoration: none;
+  color: #049;
+}
+
+table.edit-table tbody td.card-name {
+  word-wrap: break-word;
+  overflow: hidden;
+}
+
+table.edit-table tbody tr.card-row:hover {
+  background-color: #e3f0f3;
+}
+
+/* --- column selector (cards.scss #column-selector) --- */
+
+#column-selector-container {
+  display: inline-block;
+  position: relative;
+}
+
+#column-selector {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  margin-top: 4px;
+  padding: 8px;
+  width: 220px;
+  background: #fff;
+  border: 1px solid #ccc;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  text-align: left;
+  font-weight: normal;
+}
+
+#column-selector ul {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+#column-selector li {
+  padding: 2px 0;
+}
+
+#column-selector label {
+  margin-left: 4px;
+}
+
+/* --- filter panel (legacy sidebar filter tab) --- */
+
+#filter-panel {
+  width: 300px;
+  flex-shrink: 0;
+  background: #f2f2f2;
+  border: 1px solid #ccc;
+  padding: 10px;
+}
+
+#filter-panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+#filter-and-or.text-light {
+  color: #666;
+  margin: 0 0 6px;
+}
+
+#filter-widget .filter-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+
+#filter-widget select,
+#filter-widget input[type="text"] {
+  font-size: 12px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  background: #fff;
+  min-width: 0;
+  flex: 1;
+}
+
+#filter-widget .remove-filter {
+  color: #900;
+  text-decoration: none;
+  font-weight: bold;
+  flex: none;
+}
+
+#add_new_filter_link {
+  text-align: center;
+  margin: 8px 0;
+}
+
+#filter-panel .filter-errors {
+  color: #c00;
+  margin: 0 0 8px;
+  padding-left: 16px;
+}
+
+/* shared small-button treatment (legacy link_as_button) */
+.link_as_button,
+#filter-panel button,
+#column-selector button {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid #999;
+  border-radius: 3px;
+  background: #eee linear-gradient(to bottom, #fafafa, #e0e0e0);
+  color: #000;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
