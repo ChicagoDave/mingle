@@ -13,6 +13,8 @@
  * Accepts the same legacy-encoded `filters[]` parameter as the list
  * view (semantics reused from the Phase 9 read model); the filter
  * panel UI itself joins the grid with Phase 13's advanced filters.
+ * Since Phase 11 the page carries the project tab bar and the
+ * favorites panel; `favorite_id` marks the current favorite.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -40,12 +42,18 @@ import {
   GRID_GROUPABLE_KINDS,
 } from "~/domain/cards/grid-view.server";
 import { setCardPropertyValue } from "~/domain/cards/properties.server";
+import { listFavorites, serializeFavorite } from "~/domain/cards/favorites.server";
+import {
+  PrivilegeLevel,
+  privilegeLevelFor,
+} from "~/domain/identity/authorization.server";
+import { FavoritesPanel, ViewTabs } from "~/components/favorites";
 import type { FieldErrors } from "~/shared/wire-types";
 import "../styles/card-grid.css";
 
 /** Loads the lane projection plus the group-by selector's options. */
 export async function loader({ request, params }: Route.LoaderArgs) {
-  await requireUserId(request);
+  const userId = await requireUserId(request);
   const project = db
     .select()
     .from(projects)
@@ -66,8 +74,17 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .filter((d) => (GRID_GROUPABLE_KINDS as readonly string[]).includes(d.kind))
     .map((d) => d.name);
 
+  const favoriteIdParam = url.searchParams.get("favorite_id");
+  const all = listFavorites(db, project.id, userId);
+  const serialize = (list: typeof all.tabs) =>
+    list.map((f) => serializeFavorite(project.identifier, f));
+
   return {
     project: { name: project.name, identifier: project.identifier },
+    favorites: { tabs: serialize(all.tabs), team: serialize(all.team), personal: serialize(all.personal) },
+    currentFavoriteId: favoriteIdParam === null ? null : Number(favoriteIdParam),
+    canSaveFavorites:
+      privilegeLevelFor(db, userId, project.id) >= PrivilegeLevel.FULL_TEAM_MEMBER,
     groupByName,
     groupBy: view.groupBy ?? null,
     lanes: view.lanes,
@@ -194,8 +211,18 @@ function LaneCell({
 
 /** The card wall page — legacy swimming-pool layout with dnd-kit drops. */
 export default function ProjectCardGrid() {
-  const { project, groupByName, groupBy, lanes, errors, groupable, filterStrings } =
-    useLoaderData<typeof loader>();
+  const {
+    project,
+    groupByName,
+    groupBy,
+    lanes,
+    errors,
+    groupable,
+    filterStrings,
+    favorites,
+    currentFavoriteId,
+    canSaveFavorites,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -243,6 +270,12 @@ export default function ProjectCardGrid() {
         </p>
       </div>
 
+      <ViewTabs
+        identifier={project.identifier}
+        tabs={favorites.tabs}
+        currentFavoriteId={currentFavoriteId}
+      />
+
       <div className="grid-actions">
         <Form method="get">
           {filterStrings.map((f, i) => (
@@ -263,6 +296,14 @@ export default function ProjectCardGrid() {
             Apply
           </button>
         </Form>
+        <FavoritesPanel
+          identifier={project.identifier}
+          team={favorites.team}
+          personal={favorites.personal}
+          currentFavoriteId={currentFavoriteId}
+          currentView={{ style: "grid", filters: filterStrings, columns: [], groupBy: groupBy?.name ?? "" }}
+          canSave={canSaveFavorites}
+        />
       </div>
 
       {errors.length > 0 && (

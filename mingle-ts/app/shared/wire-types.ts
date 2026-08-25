@@ -113,6 +113,32 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
 };
 
 /**
+ * Saved card view styles (Phase 11) — which view a favorite reopens
+ * into. Crosses the wire in the save-favorite form's hidden `style`
+ * field and the favorite's stored `style` column (legacy
+ * CardView::Style names "list" and "grid").
+ */
+export const CARD_VIEW_STYLES = ["list", "grid"] as const;
+
+/** One of CARD_VIEW_STYLES. */
+export type CardViewStyle = (typeof CARD_VIEW_STYLES)[number];
+
+/**
+ * A favorite as the card views receive it from their loaders (Phase 11):
+ * identity, display facts, and the canonical URL it reopens into.
+ */
+export interface FavoriteSummary {
+  id: number;
+  name: string;
+  style: CardViewStyle;
+  /** True when this team favorite is shown as a project tab. */
+  tabView: boolean;
+  /** True when owned by the viewing user rather than the team. */
+  personal: boolean;
+  href: string;
+}
+
+/**
  * Card list filter operators (Phase 9) — the operator vocabulary of the
  * legacy interactive filters (operator.rb names as serialized by
  * filters.rb's encoded form). These are the values that cross the wire

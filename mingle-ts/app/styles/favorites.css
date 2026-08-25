@@ -1,0 +1,145 @@
+/*
+ * Favorites, tabs, and saved views — styles harvested from the legacy
+ * tabs.scss (#hd-nav, .tab-nav, ul.sortable-tabs li / .current-menu-item),
+ * sidebar.scss (#favorites-container, a.favorite-link) and the favorites
+ * management page (favorites/list.rhtml, _summary_table.rhtml) — Phase 11.
+ *
+ * Owner context: Card Management (presentation).
+ */
+
+/* Project tab bar (legacy layouts/_tabs.rhtml). */
+#hd-nav {
+  margin: 0;
+  padding: 0 16px;
+  background-color: #3c3c3c;
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+}
+#hd-nav .tab-nav {
+  flex-grow: 1;
+}
+#hd-nav ul.sortable-tabs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+}
+#hd-nav ul.sortable-tabs li {
+  margin: 5px 5px 0 0;
+  padding: 0 4px 0 0;
+  font-size: 12px;
+  height: 34px;
+  color: #dddddd;
+}
+#hd-nav ul.sortable-tabs li:hover {
+  background-color: #555555;
+}
+#hd-nav ul.sortable-tabs li a[role="tab-name"] {
+  display: block;
+  max-width: 125px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 10px 10px 12px 15px;
+  color: inherit;
+  text-decoration: none;
+}
+#hd-nav ul.sortable-tabs li.current-menu-item {
+  background: white;
+  box-shadow: 0 3px 5px rgba(0, 0, 0, 0.3);
+  color: #333333;
+}
+#hd-nav ul.sortable-tabs li.current-menu-item:hover {
+  background: white;
+}
+
+/* Favorites sidebar section (legacy shared/_favorites.rhtml). */
+#favorites-container {
+  margin-top: 16px;
+  font-size: 12px;
+}
+#favorites-container h3 {
+  font-size: 13px;
+  margin: 12px 0 4px;
+  color: #666666;
+}
+#favorites-container ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#favorites-container li {
+  line-height: 14px;
+  padding: 3px 0;
+}
+#favorites-container a.favorite-link {
+  display: block;
+  color: #1a5b93;
+  text-decoration: none;
+}
+#favorites-container li.current a.favorite-link {
+  font-weight: bold;
+}
+#favorites-container .view-save-panel input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px;
+  margin: 4px 0;
+}
+#favorites-container .view-save-panel label {
+  display: block;
+  margin: 4px 0;
+}
+#favorites-container .manage_link {
+  font-size: 11px;
+}
+#favorites-container .favorite-errors {
+  color: #b00020;
+}
+
+/* Favorites management page (legacy favorites/list.rhtml). */
+#favorites-page h1 {
+  font-size: 18px;
+  margin: 16px 0 8px;
+}
+#favorites-page table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 800px;
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+#favorites-page tr.table-top th {
+  text-align: left;
+  background: #e8e8e8;
+  padding: 6px 8px;
+  border-bottom: 1px solid #cccccc;
+}
+#favorites-page td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eeeeee;
+}
+#favorites-page tr.even td {
+  background: #f7f7f7;
+}
+#favorites-page td.align-right {
+  text-align: right;
+}
+#favorites-page td.italic-light {
+  font-style: italic;
+  color: #888888;
+  text-align: center;
+}
+#favorites-page .standard-link-spacing button {
+  background: none;
+  border: none;
+  color: #1a5b93;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 12px;
+  padding: 0 4px;
+}

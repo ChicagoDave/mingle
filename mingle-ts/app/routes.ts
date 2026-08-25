@@ -19,6 +19,11 @@ export default [
   route("projects/:identifier/settings", "routes/projects.settings.tsx"),
   route("projects/:identifier/team", "routes/projects.team.tsx"),
   route("projects/:identifier/groups", "routes/projects.groups.tsx"),
+  route("projects/:identifier/favorites", "routes/projects.favorites.tsx"),
+  route(
+    "projects/:identifier/favorites/:favoriteId",
+    "routes/projects.favorites.show.ts",
+  ),
   route("projects/:identifier/cards", "routes/projects.cards.tsx"),
   route("projects/:identifier/cards/grid", "routes/projects.cards.grid.tsx"),
   route("projects/:identifier/cards/new", "routes/projects.cards.new.tsx"),

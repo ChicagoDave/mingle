@@ -10,7 +10,10 @@
  * ("Show cards where:", filter rows, "Add a filter"). Filters travel
  * in the legacy-encoded `filters[]` query parameter; the no-JS filter
  * and column forms submit their own field names, which the loader
- * canonicalizes into the legacy URL shape via redirect.
+ * canonicalizes into the legacy URL shape via redirect. Since Phase 11
+ * the page carries the project tab bar and the favorites panel;
+ * `?view=<name>` (legacy cards#index view param) opens the team
+ * favorite of that name and `favorite_id` marks the current favorite.
  *
  * Public interface: `loader`, default component.
  *
@@ -38,6 +41,17 @@ import {
   queryCardList,
 } from "~/domain/cards/list-view.server";
 import {
+  favoriteHref,
+  findFavoriteByName,
+  listFavorites,
+  serializeFavorite,
+} from "~/domain/cards/favorites.server";
+import {
+  PrivilegeLevel,
+  privilegeLevelFor,
+} from "~/domain/identity/authorization.server";
+import { FavoritesPanel, ViewTabs } from "~/components/favorites";
+import {
   filterOperatorLabel,
   filterOperatorsFor,
   type PropertyKind,
@@ -60,7 +74,7 @@ function listSearch(filterStrings: string[], columnNames: string[]): string {
  * URL shape via redirect before answering.
  */
 export async function loader({ request, params }: Route.LoaderArgs) {
-  await requireUserId(request);
+  const userId = await requireUserId(request);
   const project = db
     .select()
     .from(projects)
@@ -69,6 +83,15 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (!project) throw new Response("Not Found", { status: 404 });
 
   const url = new URL(request.url);
+
+  // Legacy `view=<name>` opens the team favorite of that name.
+  const viewName = url.searchParams.get("view");
+  if (viewName !== null) {
+    const favorite = findFavoriteByName(db, project.id, viewName, null);
+    if (!favorite) throw new Response("Not Found", { status: 404 });
+    throw redirect(favoriteHref(project.identifier, favorite));
+  }
+
   const columnsParam = url.searchParams.get("columns");
   let columnNames =
     columnsParam !== null
@@ -186,8 +209,17 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     (cells[cell.cardId] ??= {})[String(definition.id)] = display;
   }
 
+  const favoriteIdParam = url.searchParams.get("favorite_id");
+  const all = listFavorites(db, project.id, userId);
+  const serialize = (list: typeof all.tabs) =>
+    list.map((f) => serializeFavorite(project.identifier, f));
+
   return {
     project: { name: project.name, identifier: project.identifier },
+    favorites: { tabs: serialize(all.tabs), team: serialize(all.team), personal: serialize(all.personal) },
+    currentFavoriteId: favoriteIdParam === null ? null : Number(favoriteIdParam),
+    canSaveFavorites:
+      privilegeLevelFor(db, userId, project.id) >= PrivilegeLevel.FULL_TEAM_MEMBER,
     cards: rows.map((row) => ({
       number: row.number,
       name: row.name,
@@ -296,8 +328,19 @@ function FilterRowFields({
 /** Card list page — legacy _card_list_results layout plus filter panel. */
 export default function ProjectCards() {
   const data = useLoaderData<typeof loader>();
-  const { project, cards, columns, filterRows, errors, filterStrings, columnNames, options } =
-    data;
+  const {
+    project,
+    cards,
+    columns,
+    filterRows,
+    errors,
+    filterStrings,
+    columnNames,
+    options,
+    favorites,
+    currentFavoriteId,
+    canSaveFavorites,
+  } = data;
   const base = `/projects/${project.identifier}/cards`;
   const removeFilterHref = (index: number) => {
     const params = new URLSearchParams();
@@ -332,6 +375,12 @@ export default function ProjectCards() {
           · <Link to={`${base}/new`}>New card</Link>
         </p>
       </div>
+
+      <ViewTabs
+        identifier={project.identifier}
+        tabs={favorites.tabs}
+        currentFavoriteId={currentFavoriteId}
+      />
 
       <div id="card-list-page">
         <div id="content">
@@ -457,6 +506,14 @@ export default function ProjectCards() {
               </button>
             </div>
           </Form>
+          <FavoritesPanel
+            identifier={project.identifier}
+            team={favorites.team}
+            personal={favorites.personal}
+            currentFavoriteId={currentFavoriteId}
+            currentView={{ style: "list", filters: filterStrings, columns: columnNames, groupBy: "" }}
+            canSave={canSaveFavorites}
+          />
         </aside>
       </div>
     </main>
