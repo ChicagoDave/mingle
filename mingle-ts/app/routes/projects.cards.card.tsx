@@ -19,6 +19,10 @@
  * command handlers; the route surfaces rejections. Requires a
  * logged-in session.
  *
+ *
+ * Since Phase 15 the property editor posts through the auto-transition
+ * dispatcher, so setting a transition-only property runs the transition
+ * that produces the value instead of writing it directly.
  * Public interface: `loader`, `action`, default component.
  *
  * Owner context: Card Management (HTTP adapter).
@@ -40,7 +44,7 @@ import {
 import { users } from "~/db/schema/identity";
 import { teamMemberships } from "~/db/schema/membership";
 import { deleteCard, updateCard } from "~/domain/cards/commands.server";
-import { setCardPropertyValue } from "~/domain/cards/properties.server";
+import { applyCardPropertyValue } from "~/domain/cards/transition-workflows.server";
 import {
   availableTransitions,
   executeTransition,
@@ -312,16 +316,50 @@ export async function action({ request, params }: Route.ActionArgs) {
       : { errors: result.errors satisfies FieldErrors };
   }
   if (intent === "set-property") {
-    const result = setCardPropertyValue(db, {
+    // Phase 15: goes through the auto-transition dispatcher, so a
+    // transition-only property moves by running the transition that
+    // produces the value rather than being overwritten.
+    const result = applyCardPropertyValue(db, {
       projectId: project.id,
       cardNumber,
       propertyDefinitionId: Number(form.get("propertyDefinitionId") ?? 0),
       value: form.get("value") ? String(form.get("value")) : null,
       actorUserId,
     });
-    return result.ok
-      ? { saved: true as const }
-      : { errors: result.errors satisfies FieldErrors };
+    if (!result.ok) return { errors: result.errors satisfies FieldErrors };
+    switch (result.value.kind) {
+      case "value_set":
+      case "unchanged":
+        return { saved: true as const };
+      case "transition_applied":
+        return { applied: result.value.transition.name };
+      case "require_user_input":
+        return {
+          errors: {
+            property: [
+              `${result.value.transition.name} sets that value, but needs you to fill it in — use the Transitions section below.`,
+            ],
+          } satisfies FieldErrors,
+        };
+      case "multi_transitions_matched":
+        return {
+          errors: {
+            property: [
+              `More than one transition sets that value (${result.value.transitions
+                .map((transition) => transition.name)
+                .join(", ")}) — choose one in the Transitions section below.`,
+            ],
+          } satisfies FieldErrors,
+        };
+      case "no_transition_matched":
+        return {
+          errors: {
+            property: [
+              "That value can only be reached by a transition, and none is available for this card right now.",
+            ],
+          } satisfies FieldErrors,
+        };
+    }
   }
   if (intent === "transition") {
     const userInput: Record<string, string> = {};
@@ -360,6 +398,10 @@ export default function CardPage() {
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
   const saved = actionData && "saved" in actionData;
+  // Phase 15: a property change on a transition-only property is
+  // reported as the transition that carried it out, not as a bare save.
+  const applied =
+    actionData && "applied" in actionData ? actionData.applied : null;
 
   return (
     <main style={{ maxWidth: 640, margin: "4rem auto", fontFamily: "sans-serif" }}>
@@ -370,6 +412,11 @@ export default function CardPage() {
         <Link to={`/projects/${project.identifier}/cards`}>All cards</Link>
       </p>
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
+      {applied ? (
+        <p style={{ color: "seagreen" }}>
+          <strong>{applied}</strong> successfully applied.
+        </p>
+      ) : null}
       <ErrorLines field="authorization" errors={errors} />
       <ErrorLines field="card" errors={errors} />
 

@@ -20,6 +20,12 @@
  * action. `usedBy` is all | members | groups with `userIds[]` /
  * `groupIds[]` alongside.
  *
+ * Since Phase 15 the page also carries the workflow generator: picking
+ * a card type and a managed list property previews the "Move <Type> to
+ * <Value>" chain that would be generated (a GET that puts the choice in
+ * the URL, so the preview is linkable), and generating writes the whole
+ * chain in one transaction.
+ *
  * Public interface: `loader`, `action`, default component.
  *
  * Owner context: Card Management (HTTP adapter).
@@ -48,11 +54,16 @@ import {
   type TransitionActionInput,
   type TransitionPrerequisiteInput,
 } from "~/domain/cards/transitions.server";
+import {
+  generateTransitionWorkflow,
+  previewTransitionWorkflow,
+} from "~/domain/cards/transition-workflows.server";
 import { requireUserId } from "~/auth/session.server";
 
 /** Loads the project's transitions (described in legacy wording) and the form's option data. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   await requireUserId(request);
+  const url = new URL(request.url);
   const project = db
     .select()
     .from(projects)
@@ -116,9 +127,29 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(groups.projectId, project.id))
     .orderBy(sql`lower(${groups.name})`)
     .all();
+  // The workflow generator's preview: a GET selection, so it is
+  // linkable and survives a reload before anything is written.
+  const workflowCardTypeId = Number(url.searchParams.get("workflow_card_type") ?? 0);
+  const workflowPropertyId = Number(url.searchParams.get("workflow_property") ?? 0);
+  const preview =
+    workflowCardTypeId > 0 && workflowPropertyId > 0
+      ? previewTransitionWorkflow(
+          db,
+          project.id,
+          workflowCardTypeId,
+          workflowPropertyId,
+        )
+      : null;
+
   return {
     project: { name: project.name, identifier: project.identifier },
     transitions: transitionList,
+    workflow: {
+      cardTypeId: workflowCardTypeId > 0 ? workflowCardTypeId : null,
+      propertyDefinitionId: workflowPropertyId > 0 ? workflowPropertyId : null,
+      preview: preview?.ok ? preview.value : null,
+      errors: preview && !preview.ok ? preview.errors : ({} as FieldErrors),
+    },
     cardTypes: types,
     properties: definitions.map((definition) => ({
       ...definition,
@@ -158,6 +189,10 @@ function prerequisiteFromField(
   if (posted === "") return null;
   if (posted === TRANSITION_SPECIAL_VALUES.SET)
     return { kind: "has_set_value", propertyDefinitionId };
+  // "(not set)" is the nil-valued specific-value requirement — the one a
+  // generated workflow puts on its first step (Phase 15).
+  if (posted === TRANSITION_SPECIAL_VALUES.NOT_SET)
+    return { kind: "has_specific_value", propertyDefinitionId, value: null };
   return { kind: "has_specific_value", propertyDefinitionId, value: posted };
 }
 
@@ -230,17 +265,46 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: true as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "generate-workflow") {
+    const result = generateTransitionWorkflow(db, {
+      projectId: project.id,
+      cardTypeId: Number(form.get("cardTypeId") ?? 0),
+      propertyDefinitionId: Number(form.get("propertyDefinitionId") ?? 0),
+      actorUserId,
+    });
+    return result.ok
+      ? {
+          generated: {
+            cardTypeName: result.value.cardTypeName,
+            propertyName: result.value.propertyName,
+            names: result.value.transitions.map((entry) => entry.name),
+          },
+        }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
 /** Card transitions page: the list and the define form. Minimal styling until UX harvest. */
 export default function TransitionsPage() {
-  const { project, transitions, cardTypes, properties, teamMembers, groups } =
-    useLoaderData<typeof loader>();
+  const {
+    project,
+    transitions,
+    cardTypes,
+    properties,
+    teamMembers,
+    groups,
+    workflow,
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
   const saved = actionData && "saved" in actionData;
+  const generated =
+    actionData && "generated" in actionData ? actionData.generated : null;
+  const listProperties = properties.filter(
+    (property) => property.kind === "enumerated",
+  );
 
   return (
     <main style={{ maxWidth: 760, margin: "4rem auto", fontFamily: "sans-serif" }}>
@@ -301,6 +365,107 @@ export default function TransitionsPage() {
         ))
       )}
 
+      <h2>Generate a workflow</h2>
+      <p style={{ color: "#555", fontSize: 13 }}>
+        Generates one transition per value of a managed list property —
+        each moving a card from the previous value to the next. Pair it
+        with the property's <em>Only a transition may change this
+        property</em> setting so cards move along the workflow instead of
+        jumping between values.
+      </p>
+      {generated ? (
+        <p style={{ color: "seagreen" }}>
+          Generated {generated.names.length} transition
+          {generated.names.length === 1 ? "" : "s"} for{" "}
+          {generated.cardTypeName} / {generated.propertyName}:{" "}
+          {generated.names.join(", ")}.
+        </p>
+      ) : null}
+      <ErrorLines field="cardType" errors={errors} />
+      <ErrorLines field="property" errors={errors} />
+      <ErrorLines field="prerequisites" errors={errors} />
+      <ErrorLines field="actions" errors={errors} />
+      <ErrorLines field="name" errors={workflow.errors} />
+      <ErrorLines field="cardType" errors={workflow.errors} />
+      <ErrorLines field="property" errors={workflow.errors} />
+      {listProperties.length === 0 ? (
+        <p>No managed list properties yet — a workflow needs one to order its steps.</p>
+      ) : (
+        <>
+          <Form method="get" style={{ marginBottom: "0.5rem" }}>
+            <label>
+              Card type{" "}
+              <select
+                name="workflow_card_type"
+                defaultValue={workflow.cardTypeId ?? ""}
+              >
+                <option value="">Select…</option>
+                {cardTypes.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+            </label>{" "}
+            <label>
+              Property{" "}
+              <select
+                name="workflow_property"
+                defaultValue={workflow.propertyDefinitionId ?? ""}
+              >
+                <option value="">Select…</option>
+                {listProperties.map((property) => (
+                  <option key={property.id} value={property.id}>
+                    {property.name}
+                  </option>
+                ))}
+              </select>
+            </label>{" "}
+            <button type="submit">Preview workflow</button>
+          </Form>
+          {workflow.preview ? (
+            <>
+              {workflow.preview.existingTransitionsCount > 0 ? (
+                <p style={{ color: "#b26a00" }}>
+                  {workflow.preview.existingTransitionsCount} existing transition
+                  {workflow.preview.existingTransitionsCount === 1 ? "" : "s"} for{" "}
+                  {workflow.preview.cardTypeName} already use{" "}
+                  {workflow.preview.propertyName}. Generating adds to them rather
+                  than replacing them.
+                </p>
+              ) : null}
+              <ol>
+                {workflow.preview.steps.map((step) => (
+                  <li key={step.name}>
+                    <strong>{step.name}</strong> — requires{" "}
+                    {workflow.preview?.propertyName} to be{" "}
+                    {step.from === null ? "(not set)" : step.from}, sets it to{" "}
+                    {step.to}
+                  </li>
+                ))}
+              </ol>
+              <Form method="post">
+                <input type="hidden" name="intent" value="generate-workflow" />
+                <input
+                  type="hidden"
+                  name="cardTypeId"
+                  value={workflow.cardTypeId ?? ""}
+                />
+                <input
+                  type="hidden"
+                  name="propertyDefinitionId"
+                  value={workflow.propertyDefinitionId ?? ""}
+                />
+                <button type="submit">
+                  Generate {workflow.preview.steps.length} transition
+                  {workflow.preview.steps.length === 1 ? "" : "s"}
+                </button>
+              </Form>
+            </>
+          ) : null}
+        </>
+      )}
+
       <h2>Create a new transition</h2>
       <Form method="post">
         <input type="hidden" name="intent" value="create" />
@@ -355,6 +520,10 @@ export default function TransitionsPage() {
                       specials={[
                         { value: "", label: "(any)" },
                         { value: TRANSITION_SPECIAL_VALUES.SET, label: "(set)" },
+                        {
+                          value: TRANSITION_SPECIAL_VALUES.NOT_SET,
+                          label: "(not set)",
+                        },
                       ]}
                     />
                   </td>

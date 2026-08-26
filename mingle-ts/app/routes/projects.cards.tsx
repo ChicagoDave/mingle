@@ -16,13 +16,18 @@
  * the page carries the project tab bar and the favorites panel;
  * `?view=<name>` (legacy cards#index view param) opens the team
  * favorite of that name and `favorite_id` marks the current favorite.
+ * Since Phase 15 each row carries a selection checkbox and the legacy
+ * `selected_cards` parameter (comma-joined card numbers, legacy's
+ * CardSelection wire shape) drives a bulk-transition panel that offers
+ * only the transitions available on EVERY selected card and applies
+ * the chosen one to all of them at once, all-or-none.
  *
- * Public interface: `loader`, default component.
+ * Public interface: `loader`, `action`, default component.
  *
  * Owner context: Card Management (HTTP adapter).
  */
 import { asc, eq, inArray } from "drizzle-orm";
-import { Form, Link, redirect, useLoaderData } from "react-router";
+import { Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.cards";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -50,6 +55,10 @@ import {
   serializeFavorite,
 } from "~/domain/cards/favorites.server";
 import {
+  commonTransitions,
+  executeBulkTransition,
+} from "~/domain/cards/transitions.server";
+import {
   PrivilegeLevel,
   privilegeLevelFor,
 } from "~/domain/identity/authorization.server";
@@ -57,16 +66,39 @@ import { FavoritesPanel, ViewTabs } from "~/components/favorites";
 import {
   filterOperatorLabel,
   filterOperatorsFor,
+  type FieldErrors,
   type PropertyKind,
 } from "~/shared/wire-types";
 import "../styles/card-list.css";
 
+/**
+ * Reads the legacy `selected_cards` parameter — comma-joined card
+ * numbers, and/or one parameter per checked box — as a deduplicated,
+ * ordered list of numbers.
+ */
+function parseSelection(params: {
+  getAll(name: string): (string | File)[];
+}): number[] {
+  const numbers = params
+    .getAll("selected_cards")
+    .flatMap((raw) => String(raw).split(","))
+    .map((raw) => Number(raw.trim()))
+    .filter((number) => Number.isInteger(number) && number > 0);
+  return [...new Set(numbers)].sort((a, b) => a - b);
+}
+
 /** Rebuilds the canonical list URL from filters[] / filters[mql] and columns. */
-function listSearch(filterStrings: string[], columnNames: string[], mql = ""): string {
+function listSearch(
+  filterStrings: string[],
+  columnNames: string[],
+  mql = "",
+  selection: number[] = [],
+): string {
   const params = new URLSearchParams();
   for (const filter of filterStrings) params.append("filters[]", filter);
   if (mql !== "") params.set("filters[mql]", mql);
   if (columnNames.length > 0) params.set("columns", columnNames.join(","));
+  if (selection.length > 0) params.set("selected_cards", selection.join(","));
   const search = params.toString();
   return search ? `?${search}` : "";
 }
@@ -109,6 +141,20 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     const filters = url.searchParams.getAll("filters[]");
     throw redirect(
       `/projects/${project.identifier}/cards${listSearch(filters, url.searchParams.getAll("col"), mql)}`,
+    );
+  }
+
+  // Canonicalize a selection submission (row checkboxes): the boxes post
+  // one parameter each; the canonical URL carries legacy's comma-joined
+  // `selected_cards`, so the selection survives reloads and links.
+  if (url.searchParams.has("apply-selection")) {
+    throw redirect(
+      `/projects/${project.identifier}/cards${listSearch(
+        url.searchParams.getAll("filters[]"),
+        columnNames,
+        mql,
+        parseSelection(url.searchParams),
+      )}`,
     );
   }
 
@@ -228,6 +274,14 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     (cells[cell.cardId] ??= {})[String(definition.id)] = display;
   }
 
+  // Only cards actually on the page may be acted on: a selection left in
+  // the URL after the filter changed must not silently transition a card
+  // the user can no longer see.
+  const visible = new Set(rows.map((row) => row.number));
+  const selection = parseSelection(url.searchParams).filter((number) =>
+    visible.has(number),
+  );
+
   const favoriteIdParam = url.searchParams.get("favorite_id");
   const all = listFavorites(db, project.id, userId);
   const serialize = (list: typeof all.tabs) =>
@@ -246,6 +300,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       cells: cells[row.id] ?? {},
     })),
     columns: view.columns.map((c) => ({ key: c.key, name: c.name })),
+    selection,
+    // Legacy bulk_transitions.js offers the intersection across the
+    // selection, because a bulk apply is all-or-none.
+    bulkTransitions: commonTransitions(db, project.id, selection, userId),
     errors: view.errors,
     // One row per raw filters[] entry (parseable or not) so the widget
     // shows exactly what the URL says and remove-links index correctly.
@@ -268,6 +326,52 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       typeNames,
     },
   };
+}
+
+/**
+ * Applies one transition to every selected card (legacy
+ * CardsController#bulk_transition). The only intent this route accepts;
+ * every other form on the page is a GET that re-shapes the URL.
+ */
+export async function action({ request, params }: Route.ActionArgs) {
+  const actorUserId = await requireUserId(request);
+  const project = db
+    .select()
+    .from(projects)
+    .where(eq(projects.identifier, params.identifier))
+    .get();
+  if (!project) throw new Response("Not Found", { status: 404 });
+
+  const form = await request.formData();
+  if (String(form.get("intent") ?? "") !== "bulk-transition")
+    throw new Response("Unknown intent", { status: 400 });
+
+  const transitionId = Number(form.get("transition_id") ?? 0);
+  if (!Number.isInteger(transitionId) || transitionId <= 0)
+    return { errors: { transition: ["Please select a transition."] } as FieldErrors };
+
+  const userInput: Record<string, string> = {};
+  for (const [key, raw] of form.entries()) {
+    const match = /^input\[(\d+)\]$/.exec(key);
+    if (match) userInput[match[1]] = String(raw);
+  }
+
+  const result = executeBulkTransition(db, {
+    projectId: project.id,
+    cardNumbers: parseSelection(form),
+    transitionId,
+    userInput,
+    actorUserId,
+  });
+  return result.ok
+    ? {
+        applied: {
+          transitionName: result.value.transitionName,
+          cardNumbers: result.value.cardNumbers,
+          changedCardNumbers: result.value.changedCardNumbers,
+        },
+      }
+    : { errors: result.errors satisfies FieldErrors };
 }
 
 type LoaderData = Awaited<ReturnType<typeof loader>>;
@@ -361,7 +465,13 @@ export default function ProjectCards() {
     favorites,
     currentFavoriteId,
     canSaveFavorites,
+    selection,
+    bulkTransitions,
   } = data;
+  const actionData = useActionData<typeof action>();
+  const bulkErrors: FieldErrors =
+    (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
+  const applied = actionData && "applied" in actionData ? actionData.applied : null;
   const base = `/projects/${project.identifier}/cards`;
   const removeFilterHref = (index: number) => {
     const params = new URLSearchParams();
@@ -449,6 +559,9 @@ export default function ProjectCards() {
                 </td>
               </tr>
               <tr className="table-column-header">
+                <th className="select" scope="col">
+                  <span className="visually-hidden">Select</span>
+                </th>
                 <th className="number">#</th>
                 <th>Name</th>
                 {columns.map((column) => (
@@ -459,6 +572,16 @@ export default function ProjectCards() {
             <tbody>
               {cards.map((card) => (
                 <tr className="card-row" key={card.number}>
+                  <td className="select">
+                    <input
+                      type="checkbox"
+                      form="card-selection"
+                      name="selected_cards"
+                      value={card.number}
+                      defaultChecked={selection.includes(card.number)}
+                      aria-label={`Select card ${card.number}`}
+                    />
+                  </td>
                   <td className="number">
                     <a href={`${base}/${card.number}`} className="number">
                       {card.number}
@@ -478,13 +601,113 @@ export default function ProjectCards() {
               ))}
               {cards.length === 0 && (
                 <tr>
-                  <td colSpan={2 + columns.length}>
+                  <td colSpan={3 + columns.length}>
                     {errors.length > 0 ? "Fix the filter errors to see cards." : "No cards found."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+
+          <section id="card-list-action-panel">
+            <Form method="get" action={base} id="card-selection">
+              {filterStrings.map((filter, index) => (
+                <input key={`${filter}-${index}`} type="hidden" name="filters[]" value={filter} />
+              ))}
+              {mql !== "" && <input type="hidden" name="filters[mql]" value={mql} />}
+              {columnNames.length > 0 && (
+                <input type="hidden" name="columns" value={columnNames.join(",")} />
+              )}
+              <button type="submit" name="apply-selection" value="1" className="link_as_button">
+                Update selection
+              </button>{" "}
+              <span className="text-light">
+                {selection.length === 0
+                  ? "Select cards to apply a transition to all of them."
+                  : `${selection.length} card${selection.length === 1 ? "" : "s"} selected.`}
+              </span>
+            </Form>
+
+            {applied && (
+              <p className="bulk-notice">
+                <strong>{applied.transitionName}</strong> successfully applied to{" "}
+                {applied.cardNumbers.length > 1 ? "cards" : "card"}{" "}
+                {applied.cardNumbers.map((number) => `#${number}`).join(", ")}.
+              </p>
+            )}
+            {Object.entries(bulkErrors).flatMap(([field, messages]) =>
+              messages.map((message) => (
+                <p className="bulk-error" key={`${field}-${message}`}>
+                  {message}
+                </p>
+              )),
+            )}
+
+            {selection.length > 0 &&
+              (bulkTransitions.length === 0 ? (
+                <p className="no_transition_message">
+                  No available transitions for selected cards
+                </p>
+              ) : (
+                <div id="transition-selector">
+                  <p className="text-light">
+                    Transitions available on every selected card:
+                  </p>
+                  {bulkTransitions.map((transition) => (
+                    <Form method="post" key={transition.id} className="bulk-transition">
+                      <input type="hidden" name="intent" value="bulk-transition" />
+                      <input type="hidden" name="transition_id" value={transition.id} />
+                      <input
+                        type="hidden"
+                        name="selected_cards"
+                        value={selection.join(",")}
+                      />
+                      {transition.inputs.map((input) => (
+                        <label key={input.propertyDefinitionId}>
+                          {input.propertyName}
+                          {input.required ? " *" : ""}{" "}
+                          {input.kind === "enumerated" ? (
+                            <select
+                              name={`input[${input.propertyDefinitionId}]`}
+                              defaultValue=""
+                            >
+                              <option value="">{input.required ? "" : "(no change)"}</option>
+                              {(
+                                options.properties.find(
+                                  (property) => property.id === input.propertyDefinitionId,
+                                )?.enumValues ?? []
+                              ).map((value) => (
+                                <option key={value} value={value}>
+                                  {value}
+                                </option>
+                              ))}
+                            </select>
+                          ) : input.kind === "user" ? (
+                            <select
+                              name={`input[${input.propertyDefinitionId}]`}
+                              defaultValue=""
+                            >
+                              <option value="">{input.required ? "" : "(no change)"}</option>
+                              {options.members.map((member) => (
+                                <option key={member.id} value={member.id}>
+                                  {member.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              name={`input[${input.propertyDefinitionId}]`}
+                              type={input.kind === "date" ? "date" : "text"}
+                            />
+                          )}
+                        </label>
+                      ))}
+                      <button type="submit">{transition.name}</button>
+                    </Form>
+                  ))}
+                </div>
+              ))}
+          </section>
         </div>
 
         <aside id="filter-panel">

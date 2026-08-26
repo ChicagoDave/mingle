@@ -6,7 +6,9 @@
  * UpdateProjectSettings (redirecting when the identifier changed),
  * "variable" runs DefineProjectVariable, "cardType" runs
  * DefineCardType, "property" runs DefinePropertyDefinition (enumerated
- * values arrive one per line). Requires a logged-in session.
+ * values arrive one per line), and "transitionOnly" runs
+ * SetPropertyTransitionOnly, which flips an existing property's
+ * transition-only restriction (Phase 15). Requires a logged-in session.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -27,6 +29,7 @@ import { db } from "~/db/client.server";
 import { projects, projectVariables } from "~/db/schema/projects";
 import { cardTypes } from "~/db/schema/cards";
 import { enumerationValues, propertyDefinitions } from "~/db/schema/properties";
+import { setPropertyTransitionOnly } from "~/domain/cards/properties.server";
 import {
   defineProjectVariable,
   updateProjectSettings,
@@ -67,6 +70,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       name: propertyDefinitions.name,
       kind: propertyDefinitions.kind,
       formula: propertyDefinitions.formula,
+      transitionOnly: propertyDefinitions.transitionOnly,
     })
     .from(propertyDefinitions)
     .where(eq(propertyDefinitions.projectId, project.id))
@@ -167,6 +171,18 @@ export async function action({ request, params }: Route.ActionArgs) {
         .filter(Boolean),
       formula: form.get("formula") ? String(form.get("formula")) : null,
       nullIsZero: form.get("nullIsZero") === "on",
+      transitionOnly: form.get("transitionOnly") === "on",
+      actorUserId: userId,
+    });
+    return result.ok
+      ? { saved: "property" as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
+  if (intent === "transitionOnly") {
+    const result = setPropertyTransitionOnly(db, {
+      projectId: project.id,
+      propertyDefinitionId: Number(form.get("propertyDefinitionId") ?? 0),
+      transitionOnly: form.get("transitionOnly") === "on",
       actorUserId: userId,
     });
     return result.ok
@@ -304,6 +320,7 @@ export default function ProjectSettings() {
       </Form>
 
       <h2>Card properties</h2>
+      <ErrorLines field="property" errors={errors} />
       {properties.length === 0 ? (
         <p>No properties defined.</p>
       ) : (
@@ -318,6 +335,25 @@ export default function ProjectSettings() {
               ) : property.kind === "formula" ? (
                 <>: {property.formula}</>
               ) : null}
+              {property.transitionOnly ? <> — transition only</> : null}
+              {property.kind === "formula" ? null : (
+                <Form method="post" style={{ display: "inline" }}>
+                  <input type="hidden" name="intent" value="transitionOnly" />
+                  <input
+                    type="hidden"
+                    name="propertyDefinitionId"
+                    value={property.id}
+                  />
+                  {property.transitionOnly ? null : (
+                    <input type="hidden" name="transitionOnly" value="on" />
+                  )}
+                  <button type="submit" style={{ marginLeft: "0.5rem" }}>
+                    {property.transitionOnly
+                      ? "Allow direct changes"
+                      : "Restrict to transitions"}
+                  </button>
+                </Form>
+              )}
             </li>
           ))}
         </ul>
@@ -365,6 +401,13 @@ export default function ProjectSettings() {
             as 0
           </label>
           <ErrorLines field="formula" errors={errors} />
+        </p>
+        <p>
+          <label>
+            <input type="checkbox" name="transitionOnly" /> Only a transition
+            may change this property
+          </label>
+          <ErrorLines field="transitionOnly" errors={errors} />
         </p>
         <button type="submit">Add property</button>
       </Form>

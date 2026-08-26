@@ -11,7 +11,9 @@
  * string, dates as ISO `yyyy-mm-dd`, users as the user id, enumerated
  * as the defined value's exact casing. Formula values are materialized
  * here too (recomputed by the domain layer whenever an input changes —
- * never written directly). History is
+ * never written directly). A definition may be marked
+ * `transition_only` (Phase 15), which moves its only write path from
+ * `setCardPropertyValue` to a transition execution. History is
  * NOT kept here — every property mutation appends a `card_versions`
  * row whose `property_values` column snapshots all values (Phase 5's
  * versioning, not a parallel mechanism).
@@ -54,6 +56,16 @@ export const propertyDefinitions = sqliteTable(
      * as 0 instead of making the result unset (legacy null_is_zero).
      */
     nullIsZero: integer("null_is_zero", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    /**
+     * When true the property may only be changed by executing a
+     * transition, never by setting it directly (legacy
+     * `transition_only`, migration 059). A project admin bypasses the
+     * restriction; everyone else's attempt to set it is routed to the
+     * matching transition instead (Phase 15 auto-transitions).
+     */
+    transitionOnly: integer("transition_only", { mode: "boolean" })
       .notNull()
       .default(false),
     /** Ordering position within the project (appended at definition time). */

@@ -1,0 +1,1 @@
+ALTER TABLE `property_definitions` ADD `transition_only` integer DEFAULT false NOT NULL;

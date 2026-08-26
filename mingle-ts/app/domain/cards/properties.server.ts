@@ -19,10 +19,12 @@
  * emits a past-tense event — or rejects (rule 10).
  *
  * Commands → events:
- *   DefinePropertyDefinition → PropertyDefinitionDefined
- *   SetCardPropertyValue     → CardPropertyValueSet (+ next card version)
+ *   DefinePropertyDefinition   → PropertyDefinitionDefined
+ *   SetCardPropertyValue       → CardPropertyValueSet (+ next card version)
+ *   SetPropertyTransitionOnly  → PropertyDefinitionTransitionOnlySet
  *
  * Public interface: `definePropertyDefinition`, `setCardPropertyValue`,
+ * `setPropertyTransitionOnly`,
  * `cardPropertySnapshot` (read helper reused by the card commands'
  * version inserts), and — for sibling Card Management commands that
  * set several properties in ONE card version (transitions.server.ts) —
@@ -231,6 +233,12 @@ export interface DefinePropertyDefinitionInput {
   formula?: string | null;
   /** Evaluate unset numeric inputs as 0 — formula kind only. */
   nullIsZero?: boolean;
+  /**
+   * Restrict the property to transition execution (legacy
+   * `transition_only`): a non-admin may not set it directly. Not
+   * allowed on the formula kind, which is never set directly by anyone.
+   */
+  transitionOnly?: boolean;
   actorUserId: number;
 }
 
@@ -253,7 +261,10 @@ export interface DefinePropertyDefinitionInput {
  * values supplied for a non-enumerated kind, an invalid enumeration
  * value (blank, over 255 chars, parenthesis-wrapped, or a
  * case-insensitive duplicate within the list), formula/nullIsZero
- * supplied for a non-formula kind, or — at definition time, never at
+ * supplied for a non-formula kind, transitionOnly supplied for the
+ * formula kind (a calculated property is never set directly, so
+ * restricting it to transitions is meaningless), or — at definition
+ * time, never at
  * evaluation time — a formula that is blank, malformed, references an
  * unknown/non-numeric/non-date property or another formula property,
  * or combines types illegally (date+date, number-date, date in * or /,
@@ -297,6 +308,11 @@ export function definePropertyDefinition(
   const values = (input.values ?? []).map((value) => value.trim());
   if (kind !== "enumerated" && values.length > 0)
     return reject("values", "are only allowed for a managed list property");
+  if (kind === "formula" && input.transitionOnly)
+    return reject(
+      "transitionOnly",
+      "is not available for a formula property, which is never set directly",
+    );
   if (kind !== "formula" && (input.formula?.trim() || input.nullIsZero))
     return reject("formula", "is only allowed for a formula property");
   const seen = new Set<string>();
@@ -346,6 +362,7 @@ export function definePropertyDefinition(
         position: (last?.highest ?? 0) + 1,
         formula: kind === "formula" ? formulaText : null,
         nullIsZero: kind === "formula" ? (input.nullIsZero ?? false) : false,
+        transitionOnly: kind === "formula" ? false : (input.transitionOnly ?? false),
       })
       .returning()
       .get();
@@ -553,8 +570,11 @@ export interface SetCardPropertyValueInput {
  * member; a value invalid for the definition's kind (non-numeric for
  * number, unparseable for date, over-long or parenthesis-wrapped text,
  * a non-member or unknown user, a value outside an enumerated
- * definition's list — never silently coerced); or no actual change
- * (same value, or clearing an unset property).
+ * definition's list — never silently coerced); no actual change
+ * (same value, or clearing an unset property); or a real change to a
+ * transition-only property attempted by anyone below project
+ * administrator ("<name>: is a transition only property." — such a
+ * property changes only by executing a transition, Phase 15).
  *
  * @returns the updated card row, or field errors
  */
@@ -612,6 +632,21 @@ export function setCardPropertyValue(
   const current = currentRow?.value ?? null;
   if (samePropertyValue(definition.kind as PropertyKind, canonical, current))
     return reject("card", "has no changes to save");
+  // Legacy transition_only_for_updating_card?: a transition-only
+  // property refuses a direct change, but only for a non-admin and only
+  // when the value would actually change (checked just above). The
+  // transition path writes through appendPropertyValueChanges and never
+  // reaches this guard.
+  if (
+    definition.transitionOnly &&
+    authorizeProjectAction(
+      db,
+      input.actorUserId,
+      input.projectId,
+      PrivilegeLevel.PROJECT_ADMIN,
+    ) !== null
+  )
+    return reject("property", `${definition.name}: is a transition only property.`);
 
   return db.transaction((tx) => {
     const row = appendPropertyValueChanges(
@@ -634,6 +669,91 @@ export function setCardPropertyValue(
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: row } as CommandResult<CardRow>;
+  });
+}
+
+export interface SetPropertyTransitionOnlyInput {
+  projectId: number;
+  propertyDefinitionId: number;
+  transitionOnly: boolean;
+  actorUserId: number;
+}
+
+/**
+ * SetPropertyTransitionOnly — turns a property's transition-only
+ * restriction on or off.
+ *
+ * DOES: updates the `property_definitions` row's `transition_only`
+ * column and its modified stamp, and appends a
+ * PropertyDefinitionTransitionOnlySet event. Existing card values are
+ * untouched — the flag governs future writes, not the current state, so
+ * no card version is appended.
+ * WHEN: an existing project's admin flips the flag on one of its
+ * non-formula properties to a value it does not already hold.
+ * BECAUSE: a property becomes a workflow's state well after it was
+ * created — usually at the moment its transitions are generated — so
+ * the restriction has to be settable on a property that already exists
+ * and already has values on cards.
+ * REJECTS: unknown project or property; actor below project
+ * administrator; a formula property (never set directly by anyone, so
+ * the restriction would mean nothing); and a no-op change ("has no
+ * changes to save").
+ *
+ * @param db - the Drizzle handle
+ * @param input - the property, the new flag value, and the actor
+ * @returns the updated definition row, or field errors
+ */
+export function setPropertyTransitionOnly(
+  db: BetterSQLite3Database,
+  input: SetPropertyTransitionOnlyInput,
+): CommandResult<PropertyDefinitionRow> {
+  if (!projectExists(db, input.projectId))
+    return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.PROJECT_ADMIN,
+  );
+  if (denied) return denied;
+  const definition = db
+    .select()
+    .from(propertyDefinitions)
+    .where(
+      and(
+        eq(propertyDefinitions.projectId, input.projectId),
+        eq(propertyDefinitions.id, input.propertyDefinitionId),
+      ),
+    )
+    .get();
+  if (!definition) return reject("property", "does not exist");
+  if (definition.kind === "formula")
+    return reject(
+      "property",
+      `${definition.name} is a formula property and is never set directly`,
+    );
+  if (definition.transitionOnly === input.transitionOnly)
+    return reject("property", "has no changes to save");
+
+  return db.transaction((tx) => {
+    const row = tx
+      .update(propertyDefinitions)
+      .set({ transitionOnly: input.transitionOnly, updatedAt: new Date() })
+      .where(eq(propertyDefinitions.id, definition.id))
+      .returning()
+      .get();
+    emitEvent(tx, {
+      type: "PropertyDefinitionTransitionOnlySet",
+      aggregateType: "Project",
+      aggregateId: input.projectId,
+      payload: {
+        projectId: input.projectId,
+        property: row.name,
+        transitionOnly: row.transitionOnly,
+      },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: row } as CommandResult<PropertyDefinitionRow>;
   });
 }
 

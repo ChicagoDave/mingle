@@ -16,6 +16,12 @@
  * Since Phase 11 the page carries the project tab bar and the
  * favorites panel; `favorite_id` marks the current favorite.
  *
+ *
+ * Since Phase 15 a drop is applied through the auto-transition
+ * dispatcher rather than the raw property command: a lane of a
+ * transition-only property is reachable only by running the transition
+ * that moves the card there, and a drop that cannot resolve to exactly
+ * one unattended transition is refused rather than silently accepted.
  * Public interface: `loader`, `action`, default component.
  *
  * Owner context: Card Management (HTTP adapter).
@@ -41,7 +47,7 @@ import {
   buildGridView,
   GRID_GROUPABLE_KINDS,
 } from "~/domain/cards/grid-view.server";
-import { setCardPropertyValue } from "~/domain/cards/properties.server";
+import { applyCardPropertyValue } from "~/domain/cards/transition-workflows.server";
 import { todayIso } from "~/domain/cards/mql-evaluator.server";
 import { listFavorites, serializeFavorite } from "~/domain/cards/favorites.server";
 import {
@@ -131,23 +137,65 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   const cardNumber = Number(form.get("cardNumber"));
   const value = String(form.get("value") ?? "");
-  const result = setCardPropertyValue(db, {
+  // Phase 15: a drop is a property change, so it goes through the
+  // auto-transition dispatcher — dragging a card into a lane of a
+  // transition-only property runs the transition that moves it there
+  // (legacy AutoTransition), rather than overwriting the value and
+  // skipping the transition's other actions.
+  const outcome = applyCardPropertyValue(db, {
     projectId: project.id,
     cardNumber,
     propertyDefinitionId: view.groupBy.id,
     value: value === "" ? null : value,
     actorUserId: userId,
   });
-  if (!result.ok) {
-    // A same-lane drop arrives as the command's no-change rejection
-    // ("card has no changes to save") — that is a quiet success here.
-    if (result.errors.card?.includes("has no changes to save"))
-      return { ok: true as const };
+  if (!outcome.ok) {
     return data(
-      { ok: false as const, errors: result.errors satisfies FieldErrors },
+      { ok: false as const, errors: outcome.errors satisfies FieldErrors },
       { status: 400 },
     );
   }
+  // A same-lane drop reports "unchanged" — a quiet success here. The
+  // three "cannot pick a transition" outcomes wrote nothing, so the
+  // drag must be reported as refused rather than silently accepted.
+  if (outcome.value.kind === "require_user_input")
+    return data(
+      {
+        ok: false as const,
+        errors: {
+          transition: [
+            `${outcome.value.transition.name} moves the card there, but needs values you must enter on the card page.`,
+          ],
+        } satisfies FieldErrors,
+      },
+      { status: 400 },
+    );
+  if (outcome.value.kind === "multi_transitions_matched")
+    return data(
+      {
+        ok: false as const,
+        errors: {
+          transition: [
+            `More than one transition moves the card there (${outcome.value.transitions
+              .map((transition) => transition.name)
+              .join(", ")}); apply the one you want on the card page.`,
+          ],
+        } satisfies FieldErrors,
+      },
+      { status: 400 },
+    );
+  if (outcome.value.kind === "no_transition_matched")
+    return data(
+      {
+        ok: false as const,
+        errors: {
+          transition: [
+            "That lane can only be reached by a transition, and none is available for this card right now.",
+          ],
+        } satisfies FieldErrors,
+      },
+      { status: 400 },
+    );
   return { ok: true as const };
 }
 

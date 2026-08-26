@@ -53,6 +53,7 @@ import {
   type TransitionRow,
 } from "~/db/schema/transitions";
 import type {
+  FieldErrors,
   PropertyKind,
   TransitionActionInputMode,
   TransitionPrerequisiteKind,
@@ -81,8 +82,12 @@ export type TransitionPrerequisiteInput =
   | {
       kind: "has_specific_value";
       propertyDefinitionId: number;
-      /** Raw value; validated per the property's kind. */
-      value: string;
+      /**
+       * Raw value, validated per the property's kind; null requires the
+       * property to be UNSET (legacy's nil-valued HasSpecificValue, the
+       * form's "(not set)"). A blank string is a rejection, not a null.
+       */
+      value: string | null;
     }
   | { kind: "has_set_value"; propertyDefinitionId: number }
   | { kind: "is_user"; userId: number }
@@ -478,7 +483,12 @@ export function defineTransition(
           );
         requiredProperties.add(definition.id);
         let value: string | null = null;
-        if (prerequisite.kind === "has_specific_value") {
+        // A null value is the deliberate "(not set)" requirement; a
+        // blank string is a form that posted nothing and is rejected.
+        if (
+          prerequisite.kind === "has_specific_value" &&
+          prerequisite.value !== null
+        ) {
           const raw = prerequisite.value.trim();
           if (!raw)
             return reject(
@@ -781,16 +791,9 @@ export function availableTransitions(
   cardNumber: number,
   userId: number,
 ): AvailableTransition[] {
-  const card = findCard(db, projectId, cardNumber);
-  if (!card) return [];
-  const facts: CardFacts = {
-    cardTypeId: card.cardTypeId,
-    values: cardValues(db, card.id),
-  };
   const names = loadTransitionNames(db, projectId);
-  return loadTransitions(db, projectId)
-    .filter((detail) => unmetRequirements(db, detail, facts, userId, names).length === 0)
-    .map((detail) => ({
+  return availableTransitionDetails(db, projectId, cardNumber, userId).map(
+    (detail) => ({
       id: detail.transition.id,
       name: detail.transition.name,
       inputs: detail.actions
@@ -801,7 +804,40 @@ export function availableTransitions(
           kind: names.properties.get(action.propertyDefinitionId)?.kind ?? "text",
           required: action.inputMode === "user_input_required",
         })),
-    }));
+    }),
+  );
+}
+
+/**
+ * The same selection as `availableTransitions`, but with each
+ * transition's prerequisite and action rows — for callers that must
+ * inspect what a transition would do, not merely offer it by name
+ * (Phase 15 auto-transition matching). Keeping the availability rule
+ * in one place is why `unmetRequirements` stays private.
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the card's project
+ * @param cardNumber - the card
+ * @param userId - the user who would execute
+ * @returns available transitions with their rows, ordered by name; []
+ *   for an unknown card
+ */
+export function availableTransitionDetails(
+  db: BetterSQLite3Database,
+  projectId: number,
+  cardNumber: number,
+  userId: number,
+): TransitionDetail[] {
+  const card = findCard(db, projectId, cardNumber);
+  if (!card) return [];
+  const facts: CardFacts = {
+    cardTypeId: card.cardTypeId,
+    values: cardValues(db, card.id),
+  };
+  const names = loadTransitionNames(db, projectId);
+  return loadTransitions(db, projectId).filter(
+    (detail) => unmetRequirements(db, detail, facts, userId, names).length === 0,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -947,4 +983,184 @@ export function executeTransition(
       value: { card: row, transitionName: detail.transition.name, changedProperties },
     } as CommandResult<TransitionExecution>;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Bulk execution (legacy CardsController#bulk_transition)
+// ---------------------------------------------------------------------------
+
+/**
+ * The transitions every card in a selection can execute right now —
+ * the intersection of each card's `availableTransitions` (legacy
+ * bulk_transitions.js `Array.findIntersection` over the per-card
+ * lists). Only these may be offered for a bulk apply, because bulk
+ * execution is all-or-none: offering a transition that is unavailable
+ * on one selected card guarantees the whole apply is cancelled.
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the cards' project
+ * @param cardNumbers - the selected card numbers
+ * @param userId - the user who would execute
+ * @returns transitions available on every selected card, ordered by
+ *   name; [] for an empty selection or when any selected card is
+ *   unknown (an unknown card has no available transitions, so the
+ *   intersection is empty)
+ */
+export function commonTransitions(
+  db: BetterSQLite3Database,
+  projectId: number,
+  cardNumbers: number[],
+  userId: number,
+): AvailableTransition[] {
+  const numbers = [...new Set(cardNumbers)];
+  if (numbers.length === 0) return [];
+  const [first, ...rest] = numbers.map((number) =>
+    availableTransitions(db, projectId, number, userId),
+  );
+  return first.filter((transition) =>
+    rest.every((list) => list.some((other) => other.id === transition.id)),
+  );
+}
+
+export interface ExecuteBulkTransitionInput {
+  projectId: number;
+  /** The selected card numbers; duplicates are collapsed. */
+  cardNumbers: number[];
+  transitionId: number;
+  /** User-input action values, applied identically to every card. */
+  userInput?: Record<string, string | null | undefined>;
+  actorUserId: number;
+}
+
+/** What ExecuteBulkTransition reports back. */
+export interface BulkTransitionExecution {
+  transitionName: string;
+  /** The cards the transition was applied to, in selection order. */
+  cardNumbers: number[];
+  /** The subset whose property values actually changed (a version each). */
+  changedCardNumbers: number[];
+}
+
+/** Thrown to unwind the bulk transaction when one card rejects. */
+class BulkTransitionAbort extends Error {
+  constructor(readonly errors: FieldErrors) {
+    super("bulk transition aborted");
+    this.name = "BulkTransitionAbort";
+  }
+}
+
+/**
+ * Appends legacy's cancellation sentence to every message of a
+ * per-card rejection, so the caller reports both which card refused
+ * and that nothing was written.
+ */
+function withCancellation(errors: FieldErrors): FieldErrors {
+  const cancelled: FieldErrors = {};
+  for (const [field, messages] of Object.entries(errors))
+    cancelled[field] = messages.map(
+      (message) =>
+        `${message.endsWith(".") ? message : `${message}.`} All work was cancelled.`,
+    );
+  return cancelled;
+}
+
+/**
+ * ExecuteBulkTransition — applies one transition to a selection of cards.
+ *
+ * DOES: executes the transition against each selected card in one
+ * transaction, so each card that changes gets exactly ONE new
+ * `card_versions` row and its updated `card_property_values` (via
+ * `executeTransition`, which is the only execution path — ADR-0007
+ * Decision 4), emits the per-card TransitionExecuted events that
+ * execution already emits, and appends one BulkTransitionExecuted
+ * event naming the transition and every card applied.
+ * WHEN: the actor is a full team member of an existing project, the
+ * transition exists in it, every selected card exists, and the
+ * transition is applicable to every one of them for this actor.
+ * BECAUSE: legacy bulk_transition is all-or-none — a selection is a
+ * single user gesture, so a transition that is not applicable to one
+ * card must leave the other cards untouched rather than half-applying
+ * the gesture ("All work was cancelled.").
+ * REJECTS: unknown project; actor below full team member; an empty
+ * selection ("Please select at least one card."); an unknown
+ * transition; a selected card that does not exist; and any per-card
+ * rejection `executeTransition` would give (not applicable, with the
+ * card number and unmet requirements named; a missing required user
+ * input; an invalid user-entered value) — with the whole transaction
+ * rolled back and " All work was cancelled." appended, so NO card is
+ * left changed.
+ *
+ * @param db - the Drizzle handle
+ * @param input - the selection, transition, user input, and actor
+ * @returns the applied card numbers, or field errors
+ */
+export function executeBulkTransition(
+  db: BetterSQLite3Database,
+  input: ExecuteBulkTransitionInput,
+): CommandResult<BulkTransitionExecution> {
+  if (!projectExists(db, input.projectId))
+    return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.FULL_TEAM_MEMBER,
+  );
+  if (denied) return denied;
+  const numbers = [...new Set(input.cardNumbers)];
+  if (numbers.length === 0)
+    return reject("cards", "Please select at least one card.");
+  const detail = loadTransition(db, input.projectId, input.transitionId);
+  if (!detail)
+    return reject(
+      "transition",
+      `Couldn't find transition with id ${input.transitionId}.`,
+    );
+  for (const number of numbers)
+    if (!findCard(db, input.projectId, number))
+      return reject("cards", `Couldn't find card with number ${number}.`);
+
+  try {
+    return db.transaction((tx) => {
+      const changed: number[] = [];
+      for (const number of numbers) {
+        const result = executeTransition(tx, {
+          projectId: input.projectId,
+          cardNumber: number,
+          transitionId: input.transitionId,
+          userInput: input.userInput,
+          actorUserId: input.actorUserId,
+        });
+        // Unwinds the whole selection: legacy raises
+        // TransitionNotAvailableException out of the same loop.
+        if (!result.ok) throw new BulkTransitionAbort(result.errors);
+        if (result.value.changedProperties.length > 0) changed.push(number);
+      }
+      emitEvent(tx, {
+        type: "BulkTransitionExecuted",
+        aggregateType: "Project",
+        aggregateId: input.projectId,
+        payload: {
+          projectId: input.projectId,
+          transitionId: detail.transition.id,
+          transition: detail.transition.name,
+          cardNumbers: numbers,
+          changedCardNumbers: changed,
+        },
+        actorUserId: input.actorUserId,
+      });
+      return {
+        ok: true,
+        value: {
+          transitionName: detail.transition.name,
+          cardNumbers: numbers,
+          changedCardNumbers: changed,
+        },
+      } as CommandResult<BulkTransitionExecution>;
+    });
+  } catch (error) {
+    if (error instanceof BulkTransitionAbort)
+      return { ok: false, errors: withCancellation(error.errors) };
+    throw error;
+  }
 }
