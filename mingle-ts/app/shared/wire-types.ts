@@ -25,6 +25,18 @@
 export type FieldErrors = Record<string, string[]>;
 
 /**
+ * The card type pseudo-property's display name (legacy
+ * CardTypeDefinition#name). Filterable and selectable as a column like
+ * a real property, but backed by `cards.card_type_id`.
+ *
+ * Lives here rather than in the list-view module because it crosses the
+ * wire in `filters[]` and `columns` params and is rendered by the card
+ * list's own selectors — both sides must agree on the exact string, and
+ * a `.server` module cannot be imported by the browser (rule 8b).
+ */
+export const CARD_TYPE_COLUMN_NAME = "Type";
+
+/**
  * Project variable data types (legacy ProjectVariable::DATA_TYPES).
  * Crosses the wire in the define-variable form's type selector.
  */

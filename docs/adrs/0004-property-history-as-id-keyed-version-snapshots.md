@@ -58,7 +58,12 @@ rows, violating the append-only invariant.
 - Phase 12/13 MQL evaluates against `card_property_values` — two read
   shapes, one per purpose; neither serves the other's queries.
 - A property **rename** command (future) updates only
-  `property_definitions.name`. A property **deletion** command must
+  `property_definitions.name` *as far as history is concerned* — it
+  never rewrites snapshot rows, which is this ADR's point. What a
+  rename owes the human-authored texts that name the property
+  (formulas, stored MQL, encoded filters) is decided by ADR-0012, which
+  narrows the "updates only" reading above. A property **deletion**
+  command must
   decide what orphaned snapshot keys mean at render time (legacy hid the
   property from history); it must NOT rewrite snapshot rows.
 - Raw snapshot JSON in the database is not human-readable without a join

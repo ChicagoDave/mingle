@@ -36,6 +36,7 @@ import {
   type PropertyDefinitionRow,
 } from "~/db/schema/properties";
 import {
+  CARD_TYPE_COLUMN_NAME,
   FILTER_OPERATORS,
   filterOperatorsFor,
   type FilterOperator,
@@ -50,12 +51,10 @@ import {
   type MqlEvaluationContext,
 } from "./mql-evaluator.server";
 
-/**
- * The card type pseudo-property's display name (legacy
- * CardTypeDefinition#name). Filterable and selectable as a column like
- * a real property, but backed by `cards.card_type_id`.
- */
-export const CARD_TYPE_COLUMN_NAME = "Type";
+// The card type pseudo-property's display name is a wire constant —
+// the browser needs the same string this module filters on — so it is
+// defined in wire-types and re-exported here for server-side callers.
+export { CARD_TYPE_COLUMN_NAME };
 
 /** Legacy filters.rb ENCODED_FORM: `[property][operator][value]`. */
 const ENCODED_FORM = /^\[([^\]]*?)\]\[([^\]]*?)\]\[(.*?)\]$/;

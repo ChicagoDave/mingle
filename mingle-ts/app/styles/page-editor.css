@@ -1,0 +1,99 @@
+/**
+ * Wiki page editor styling (Phase 16).
+ *
+ * Purpose: gives the TipTap editing surface a visible frame and the
+ * block spacing a document needs, and styles the same elements in the
+ * read view so a page looks the way it looked while being written.
+ *
+ * Owner context: Wiki & Content (presentation).
+ */
+
+.page-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  background: #f6f6f6;
+}
+
+.page-editor-toolbar button {
+  min-width: 30px;
+  padding: 3px 8px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.page-editor-toolbar button:hover {
+  background: #ececec;
+}
+
+.page-editor-toolbar button[aria-pressed="true"] {
+  background: #dce7f5;
+  border-color: #7aa3d4;
+}
+
+.page-editor .tiptap {
+  min-height: 320px;
+  padding: 12px 14px;
+  border: 1px solid #ccc;
+  border-radius: 0 0 4px 4px;
+  background: #fff;
+  outline: none;
+}
+
+.page-editor .tiptap p:first-child,
+#page-content > *:first-child {
+  margin-top: 0;
+}
+
+.page-editor .tiptap pre,
+#page-content pre {
+  padding: 8px 10px;
+  border-radius: 3px;
+  background: #f4f4f4;
+  overflow-x: auto;
+}
+
+.page-editor .tiptap blockquote,
+#page-content blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 3px solid #ddd;
+  color: #555;
+}
+
+#page-content table,
+.page-editor .tiptap table {
+  border-collapse: collapse;
+}
+
+#page-content th,
+#page-content td,
+.page-editor .tiptap th,
+.page-editor .tiptap td {
+  border: 1px solid #ddd;
+  padding: 4px 8px;
+}
+
+/* Legacy class: a wiki link whose target has not been written yet. */
+#page-content a.non-existent-wiki-page-link {
+  color: #b1442a;
+}
+
+#page-content span.invalid-wiki-page-link {
+  color: #b00020;
+  border-bottom: 1px dotted #b00020;
+  cursor: help;
+}
+
+.page-editor-help code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+}

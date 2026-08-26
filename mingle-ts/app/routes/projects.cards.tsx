@@ -42,7 +42,6 @@ import { teamMemberships } from "~/db/schema/membership";
 import { requireUserId } from "~/auth/session.server";
 import {
   buildCardListView,
-  CARD_TYPE_COLUMN_NAME,
   encodeFilterString,
   parseFilterString,
   queryCardList,
@@ -64,6 +63,7 @@ import {
 } from "~/domain/identity/authorization.server";
 import { FavoritesPanel, ViewTabs } from "~/components/favorites";
 import {
+  CARD_TYPE_COLUMN_NAME,
   filterOperatorLabel,
   filterOperatorsFor,
   type FieldErrors,
@@ -494,6 +494,7 @@ export default function ProjectCards() {
           <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/team`}>Team</Link> ·{" "}
+          <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
           <Link
             to={{
               pathname: `${base}/grid`,

@@ -25,6 +25,13 @@ export default [
     "projects/:identifier/favorites/:favoriteId",
     "routes/projects.favorites.show.ts",
   ),
+  route("projects/:identifier/wiki", "routes/projects.wiki.tsx"),
+  route("projects/:identifier/wiki/new", "routes/projects.wiki.new.tsx"),
+  route("projects/:identifier/wiki/:pagename", "routes/projects.wiki.page.tsx"),
+  route(
+    "projects/:identifier/wiki/:pagename/edit",
+    "routes/projects.wiki.page.edit.tsx",
+  ),
   route("projects/:identifier/cards", "routes/projects.cards.tsx"),
   route("projects/:identifier/cards/grid", "routes/projects.cards.grid.tsx"),
   route("projects/:identifier/cards/new", "routes/projects.cards.new.tsx"),

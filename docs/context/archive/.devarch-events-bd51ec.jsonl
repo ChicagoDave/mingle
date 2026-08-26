@@ -1,0 +1,2 @@
+{"ts":"2026-08-26T16:09:31Z","kind":"hook","source":"session-start","msg":"Session bd51ec started on main","detail":"previous session COMPLETE","branch":"main","session":"bd51ec","gate":"session-init","budget":"0/350"}
+{"ts":"2026-08-26T16:09:36Z","kind":"hook","source":"session-finalize","msg":"Session ended — event log archived","detail":"bd51ec","branch":"main","session":"bd51ec","gate":"","budget":"0/350"}

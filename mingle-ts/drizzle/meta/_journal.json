@@ -78,6 +78,13 @@
       "when": 1787725931962,
       "tag": "0010_salty_drax",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1787761651737,
+      "tag": "0011_remarkable_golden_guardian",
+      "breakpoints": true
     }
   ]
 }

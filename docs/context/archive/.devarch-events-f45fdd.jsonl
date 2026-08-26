@@ -1,0 +1,2 @@
+{"ts":"2026-08-26T16:09:38Z","kind":"hook","source":"session-start","msg":"Session f45fdd started on main","detail":"previous session COMPLETE","branch":"main","session":"f45fdd","gate":"session-init","budget":"0/350"}
+{"ts":"2026-08-26T16:11:55Z","kind":"hook","source":"session-finalize","msg":"Session ended — event log archived","detail":"f45fdd","branch":"main","session":"f45fdd","gate":"","budget":"1/350"}
