@@ -36,16 +36,16 @@
 
 ## Key Decisions
 
-### 1. `applyCardPropertyValue` becomes the sole UI property-change entry point (candidate ADR, not yet written)
+### 1. `applyCardPropertyValue` becomes the sole UI property-change entry point ([ADR-0008](../adrs/0008-applycardpropertyvalue-is-the-ui-property-change-entry-point.md))
 `setCardPropertyValue` is reserved for direct/admin writes; any future path (bulk set-properties, import, the REST API) must choose deliberately which one it calls.
 
-### 2. Transition-only bypass asymmetry (candidate ADR, not yet written)
+### 2. Transition-only bypass asymmetry ([ADR-0009](../adrs/0009-transition-only-enforcement-is-split-between-guard-and-dispatcher.md))
 The project-admin bypass lives in `setCardPropertyValue`, while `applyCardPropertyValue`'s dispatcher routes on the raw `transitionOnly` flag regardless of role — legacy-faithful but a surprising split if not documented.
 
-### 3. Null-valued `has_specific_value` means "unset" (candidate ADR, not yet written)
+### 3. Null-valued `has_specific_value` means "unset" ([ADR-0010](../adrs/0010-null-has-specific-value-prerequisite-means-unset.md))
 Phase 23 tree actions will inherit this semantics.
 
-The user was asked "ADR-worthy?" per rule 11 for these three and has not yet answered — this is an **open item**, not a decision to treat as settled. Do not write ADR-0008 (next free number) without that confirmation.
+The user confirmed all three as ADR-worthy in session 3076c1 (2026-08-26); they are written as ADR-0008, ADR-0009, and ADR-0010 and are ACCEPTED. This is no longer an open item.
 
 ## Next Phase
 - **Phase 16**: "Wiki pages and rich editing" (Large, budget 350) — `Page` aggregate with `page_versions` mirroring `card_versions`, TipTap rich text, cross-page and page-to-card linking. Not started; not advanced to CURRENT per this project's per-phase go-ahead convention — awaiting explicit user go-ahead next session.
@@ -55,7 +55,6 @@ The user was asked "ADR-worthy?" per rule 11 for these three and has not yet ans
 
 ### Short Term
 - Phase 16 awaits go-ahead: wiki pages and rich editing.
-- ADR-worthy question from this session (3 candidate decisions above) still unanswered.
 - Legacy's workflow generator also creates a hidden "Moved to `<Value>` on" date property per step — deferred this phase. No `hidden` column exists on `property_definitions` yet; honoring it properly means threading it through list columns, grid, filters, and the card page, which is cross-cutting work beyond Phase 15's exit state. The generated chain is complete without it.
 - Carried forward from Phase 14, still open: `require_comment` (Phase 20 comments), project-variable bindings on prerequisites/actions, tree actions (Phase 23), transition edit-in-place (delete+recreate only), transition usage checks on card-type change or property-value rename.
 
@@ -107,7 +106,7 @@ The user was asked "ADR-worthy?" per rule 11 for these three and has not yet ans
 
 ## Architectural Decisions
 
-- None this session — ADR-0007 (Phase 14) already covers the single-version-append shape `executeBulkTransition` reuses. Three candidate decisions (sole UI entry point, transition-only bypass asymmetry, null-means-unset) were raised for an "ADR-worthy?" ask per rule 11 but the user has not yet answered; no ADR-0008 exists.
+- ADR-0007 (Phase 14) already covers the single-version-append shape `executeBulkTransition` reuses. Three further decisions raised here for an "ADR-worthy?" ask per rule 11 were confirmed in session 3076c1 (2026-08-26) and written as ADR-0008 (sole UI entry point), ADR-0009 (transition-only bypass asymmetry), and ADR-0010 (null-means-unset).
 - Pattern applied: transaction-around-a-loop for bulk execution, per ADR-0007's own Consequences section, rather than a new bulk-specific write path.
 
 ## Mutation Audit

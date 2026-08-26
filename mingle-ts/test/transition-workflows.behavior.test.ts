@@ -1167,6 +1167,62 @@ describe("ApplyCardPropertyValue", () => {
     expect(reloadValues(first)[String(statusId)]).toBe("New");
   });
 
+  it("routes a project admin through the transition too, instead of writing the value", () => {
+    // ADR-0009: the admin bypass lives in setCardPropertyValue's guard,
+    // NOT in this dispatcher, which routes on the transitionOnly flag
+    // regardless of role. A project admin dragging a card takes the
+    // workflow step exactly as a full team member does. This is the
+    // fourth of the four role/path cases and the one a future reader is
+    // most likely to "fix" wrongly by adding a role check here.
+    mustOk(
+      setPropertyTransitionOnly(db, {
+        projectId,
+        propertyDefinitionId: statusId,
+        transitionOnly: true,
+        actorUserId: projectAdminId,
+      }),
+      "transition only",
+    );
+    mustOk(
+      define({
+        name: "Open and assign",
+        actions: [
+          { propertyDefinitionId: statusId, inputMode: "fixed", value: "Open" },
+          { propertyDefinitionId: ownerId, inputMode: "fixed", value: String(memberId) },
+        ],
+      }),
+      "transition",
+    );
+    const before = reloadCard(first).version;
+    const executedBefore = eventsOfType("TransitionExecuted").length;
+    const directWritesBefore = eventsOfType("CardPropertyValueSet").length;
+
+    const result = mustOk(
+      applyCardPropertyValue(db, {
+        projectId,
+        cardNumber: first,
+        propertyDefinitionId: statusId,
+        value: "Open",
+        actorUserId: projectAdminId,
+      }),
+      "admin through dispatcher",
+    );
+
+    expect(result).toMatchObject({
+      kind: "transition_applied",
+      transition: { name: "Open and assign" },
+    });
+    // The transition's OTHER action landed as well — that is what
+    // separates "the transition fired" from "the value was written":
+    // a direct write would set Status alone and leave Owner unset.
+    const values = reloadValues(first);
+    expect(values[String(statusId)]).toBe("Open");
+    expect(values[String(ownerId)]).toBe(String(memberId));
+    expect(reloadCard(first).version).toBe(before + 1);
+    expect(eventsOfType("TransitionExecuted")).toHaveLength(executedBefore + 1);
+    expect(eventsOfType("CardPropertyValueSet")).toHaveLength(directWritesBefore);
+  });
+
   it("rejects a formula property, an invalid value, an unknown card, and a readonly actor", () => {
     expect(
       mustReject(
