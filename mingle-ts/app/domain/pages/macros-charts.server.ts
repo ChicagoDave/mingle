@@ -33,6 +33,12 @@ import {
   type ContentNode,
 } from "~/domain/pages/content.server";
 import {
+  element,
+  paletteColor,
+  round,
+  text,
+} from "~/domain/pages/chart-svg.server";
+import {
   MacroError,
   type MacroContext,
   type MacroDefinition,
@@ -50,16 +56,6 @@ registerMacroElements({
   text: ["x", "y", "fill", "font-size", "text-anchor", "dominant-baseline"],
   desc: [],
 });
-
-/**
- * Slice colours. Chosen for distinguishability rather than brand: a
- * chart whose categories are only separable by hue fails any reader
- * who cannot separate them, so the palette also varies in lightness.
- */
-const PALETTE = [
-  "#2f6fb2", "#e08214", "#4a9c56", "#c0504d", "#7b62a3",
-  "#3f9fa5", "#b5892a", "#8a6d9e", "#5f7a8c", "#96632e",
-];
 
 /** Reads a parameter as a scalar. */
 function scalar(params: MacroParams, key: string): string | null {
@@ -80,20 +76,6 @@ function integer(params: MacroParams, key: string, fallback: number): number {
     throw new MacroError(`Parameter ${key} must be a positive number.`);
   }
   return Math.floor(value);
-}
-
-/** Builds an element node. */
-function element(
-  tag: string,
-  attrs: Record<string, string>,
-  children: ContentNode[] = [],
-): ContentNode {
-  return { kind: "element", tag, attrs, children };
-}
-
-/** Builds a text node. */
-function text(value: string): ContentNode {
-  return { kind: "text", text: value };
 }
 
 /** One labelled slice. */
@@ -149,11 +131,6 @@ function point(cx: number, cy: number, r: number, fraction: number): [number, nu
   return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
 }
 
-/** Rounds to two decimals so path data stays readable and stable. */
-function round(value: number): string {
-  return (Math.round(value * 100) / 100).toString();
-}
-
 /**
  * `{{ pie-chart data: SELECT status, COUNT(*) GROUP BY status }}`
  *
@@ -186,7 +163,7 @@ export const pieChartMacro: MacroDefinition = {
     const shapes: ContentNode[] = [];
     let cursor = 0;
     data.forEach((slice, index) => {
-      const fill = PALETTE[index % PALETTE.length];
+      const fill = paletteColor(index);
       const fraction = slice.value / total;
       if (data.length === 1) {
         shapes.push(
@@ -217,7 +194,7 @@ export const pieChartMacro: MacroDefinition = {
       legend.push(
         element("rect", {
           x: "0", y: round(y - 10), width: "12", height: "12", rx: "2",
-          fill: PALETTE[index % PALETTE.length],
+          fill: paletteColor(index),
         }),
       );
       legend.push(

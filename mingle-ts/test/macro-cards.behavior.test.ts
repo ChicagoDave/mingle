@@ -208,9 +208,21 @@ describe("table macro", () => {
     expect(out).toContain("Need to specify query.");
   });
 
-  it("refuses AS OF rather than silently answering about today", () => {
-    const out = render("{{ table query: SELECT number AS OF '2026-01-01' }}");
-    expect(out).toContain("AS OF is not supported yet.");
+  it("answers AS OF historically instead of about today (Phase 18)", () => {
+    // Phase 17 refused AS OF outright; Phase 18 compiles it to a read
+    // over card_versions. These cards were all created during this
+    // run, so as of a date before the run they did not exist yet —
+    // an empty result here is the historical answer, not a refusal.
+    const out = render("{{ table query: SELECT number AS OF '2010-01-01' }}");
+    expect(out).not.toContain("AS OF is not supported yet.");
+    expect(out).toContain("No cards match this query.");
+  });
+
+  it("still refuses FROM TREE, which has no model behind it", () => {
+    const out = render("{{ table query: SELECT number FROM TREE 'planning' }}");
+    // The apostrophes come back escaped — the refusal reaches the
+    // reader as text in an error node, never as markup.
+    expect(out).toContain("Tree with name &#39;planning&#39; does not exist");
   });
 
   it("refuses a cross-project macro instead of ignoring the parameter", () => {

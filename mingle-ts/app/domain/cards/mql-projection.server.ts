@@ -17,11 +17,12 @@
  * empty string rather than the word "null". Resolution happens in one
  * query per result set, not one per cell.
  *
- * Not implemented here, and rejected rather than silently ignored:
- * `AS OF` (a historical read over `card_versions`, which is Phase 18's
- * subject) and `FROM TREE` (no tree model exists yet). Both parse, so
- * refusing them explicitly is what keeps a macro from quietly
- * answering a different question than the one asked.
+ * `AS OF` is not special-cased here either: it selects a different
+ * `CardSource` (evaluator), so every expression below is built the same
+ * way over the cards as they stood at the end of that day (Phase 18).
+ * `FROM TREE` is still rejected rather than silently ignored — no tree
+ * model exists yet, and refusing it explicitly is what keeps a macro
+ * from quietly answering a different question than the one asked.
  *
  * Public interface: `queryMqlProjection`, `MqlProjection`,
  * `MqlProjectionColumn`, `MqlProjectionRow`.
@@ -29,10 +30,10 @@
  * Owner context: Query (read model). Read-only — never writes.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { cards } from "~/db/schema/cards";
+import { and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
 import { users } from "~/db/schema/identity";
 import {
+  cardSourceFor,
   mqlExpressions,
   type MqlEvaluationContext,
 } from "~/domain/cards/mql-evaluator.server";
@@ -100,8 +101,8 @@ function columnIsNumeric(column: MqlSelectColumn): boolean {
  * @param query - a resolved query (from parseMql) carrying SELECT columns
  * @param context - what CURRENT USER and TODAY bind to
  * @returns the projected columns and their display-ready rows
- * @throws Error when the query has no SELECT clause, or uses `AS OF` or
- *   `FROM TREE`, neither of which this rewrite can answer yet
+ * @throws Error when the query has no SELECT clause, or uses `FROM
+ *   TREE`, which this rewrite cannot answer yet
  */
 export function queryMqlProjection(
   db: BetterSQLite3Database,
@@ -114,14 +115,12 @@ export function queryMqlProjection(
       "This query needs SELECT columns, for example: SELECT number, name WHERE type = Story",
     );
   }
-  if (query.asOf) {
-    throw new Error("AS OF is not supported yet.");
-  }
   if (query.from?.trees?.length) {
     throw new Error("FROM TREE is not supported yet.");
   }
 
   const expressions = mqlExpressions(db, projectId, context);
+  const source = cardSourceFor(query);
   const selectColumns = query.select.columns;
   const aggregated =
     selectColumns.some(isAggregate) || (query.groupBy?.length ?? 0) > 0;
@@ -139,16 +138,16 @@ export function queryMqlProjection(
   selectColumns.forEach((column, index) => {
     selection[`c${index}`] =
       column.type === "column"
-        ? expressions.valueExpr(column.property, cards)
+        ? expressions.valueExpr(column.property, source)
         : aggregateExpr(column, expressions.valueExpr(
             column.column ? column.column.property : { source: "predefined", key: "number", name: "Number", kind: "number" },
-            cards,
+            source,
           ));
   });
-  if (!aggregated) selection.__number = sql<number>`${cards.number}`;
+  if (!aggregated) selection.__number = sql<number>`${source.number}`;
 
   const where = query.where
-    ? expressions.condition(query.where, cards)
+    ? expressions.condition(query.where, source)
     : undefined;
 
   let statement = (
@@ -156,8 +155,8 @@ export function queryMqlProjection(
       ? db.selectDistinct(selection)
       : db.select(selection)
   )
-    .from(cards)
-    .where(and(eq(cards.projectId, projectId), where))
+    .from(source.table)
+    .where(and(source.scope(projectId), where))
     .$dynamic();
 
   if (query.groupBy?.length) {
@@ -172,19 +171,19 @@ export function queryMqlProjection(
     // looks like a right one.
     statement = statement.groupBy(
       ...query.groupBy.map((column) =>
-        expressions.valueExpr(column.property, cards),
+        expressions.valueExpr(column.property, source),
       ),
     );
   }
   if (query.orderBy?.length) {
     statement = statement.orderBy(
       ...query.orderBy.map((entry) => {
-        const expr = expressions.orderExpr(entry.column.property, cards);
+        const expr = expressions.orderExpr(entry.column.property, source);
         return entry.direction === "desc" ? desc(expr) : asc(expr);
       }),
     );
   } else if (!aggregated) {
-    statement = statement.orderBy(asc(cards.number));
+    statement = statement.orderBy(asc(source.number));
   }
 
   const raw = statement.all() as Record<string, unknown>[];

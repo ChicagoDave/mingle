@@ -24,6 +24,7 @@ import type {
 import { expandMacros, registerMacro } from "~/domain/pages/macros.server";
 import { tableMacro, valueMacro } from "~/domain/pages/macros-cards.server";
 import { pieChartMacro } from "~/domain/pages/macros-charts.server";
+import { dailyHistoryChartMacro } from "~/domain/pages/macros-history.server";
 
 let installed = false;
 
@@ -37,6 +38,7 @@ export function installBuiltInMacros(): void {
   registerMacro(tableMacro);
   registerMacro(valueMacro);
   registerMacro(pieChartMacro);
+  registerMacro(dailyHistoryChartMacro);
   installed = true;
 }
 
