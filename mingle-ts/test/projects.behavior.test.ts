@@ -279,6 +279,36 @@ describe("updateProjectSettings (UpdateProjectSettings → ProjectSettingsUpdate
     expect(JSON.parse(events[0].payload)).toEqual({ changed: ["name"] });
   });
 
+  it("names the identifier and description when those are what moved", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Card Wall",
+      identifier: "kanban_wall",
+      description: "renamed",
+      actorUserId: actorId,
+    });
+    const events = eventsOfType("ProjectSettingsUpdated");
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0].payload)).toEqual({
+      changed: ["identifier", "description"],
+    });
+  });
+
+  it("names nothing when a resubmit changes no field", () => {
+    const project = makeProject("Card Wall", "card_wall");
+    updateProjectSettings(db, {
+      projectId: project.id,
+      name: "Card Wall",
+      identifier: "card_wall",
+      description: null,
+      actorUserId: actorId,
+    });
+    expect(JSON.parse(eventsOfType("ProjectSettingsUpdated")[0].payload)).toEqual({
+      changed: [],
+    });
+  });
+
   it("accepts an unchanged submit (uniqueness excludes the project itself)", () => {
     const project = makeProject("Card Wall", "card_wall");
     const result = updateProjectSettings(db, {

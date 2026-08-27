@@ -619,3 +619,140 @@ describe("parseMql — rejections: resolution against the project", () => {
     ]);
   });
 });
+
+/**
+ * The parser's refusal paths. The 2026-08-27 mutation audit found these
+ * reachable but undriven: every `this.fail(...)` below was a branch no
+ * fixture executed, which meant the grammar's shape was pinned only where
+ * it succeeds. A parser that accepts what it should refuse is how invalid
+ * MQL reaches the evaluator, so each case names the malformed query and
+ * asserts the exact message a user would see.
+ */
+describe("parseMql — refusal paths", () => {
+  it("refuses PROPERTY unless a property name follows it", () => {
+    expect(errors("Status = PROPERTY")).toEqual(["parse error: unexpected end of query"]);
+    expect(errors("Status = PROPERTY (")).toEqual(['parse error on value "(" (OPEN)']);
+    expect(errors("PROPERTY = open")).toEqual(['parse error on value "=" (OP)']);
+  });
+
+  it("accepts NUMBER and NUMBERS as ordinary column names", () => {
+    expect(where("number = 5")).toMatchObject({
+      type: "comparison",
+      column: { property: { source: "predefined", key: "number", name: "Number" } },
+      value: { canonical: "5" },
+    });
+    // NUMBERS is read as a column name too — it just names no property here.
+    expect(errors("numbers = 5")).toEqual(["Card property 'numbers' does not exist!"]);
+  });
+
+  it("refuses a column that is not followed by an operator", () => {
+    expect(errors("Status open")).toEqual(['parse error on value "open" (IDENTIFIER)']);
+  });
+
+  it("refuses a condition that opens with something no column name could be", () => {
+    expect(errors("= open")).toEqual(['parse error on value "=" (OP)']);
+    expect(errors("AND Status = open")).toEqual(['parse error on value "AND" (AND)']);
+  });
+
+  it("refuses AS OF without a value, and names the format when the value is not a date", () => {
+    expect(errors("SELECT name AS OF")).toEqual(["parse error: unexpected end of query"]);
+    expect(errors("SELECT name AS OF =")).toEqual(['parse error on value "=" (OP)']);
+    expect(errors("SELECT name AS OF (")).toEqual(['parse error on value "(" (OPEN)']);
+    expect(errors("SELECT name AS OF today WHERE Status = open")).toEqual([
+      "AS OF requires a date in yyyy-mm-dd format; 'today' is not one.",
+    ]);
+  });
+
+  it("refuses a keyword where a value belongs", () => {
+    expect(errors("Status = AND")).toEqual(['parse error on value "AND" (AND)']);
+    expect(errors("Status = SELECT")).toEqual(['parse error on value "SELECT" (SELECT)']);
+    expect(errors("Status = )")).toEqual(['parse error on value ")" (CLOSE)']);
+  });
+
+  it("refuses THIS CARD with a dot but no property after it", () => {
+    expect(errors("Status = THIS CARD.")).toEqual(["parse error: unexpected end of query"]);
+    expect(errors("Status = THIS CARD.(")).toEqual(['parse error on value "(" (OPEN)']);
+  });
+
+  it("refuses an empty project-variable parenthesis", () => {
+    expect(errors("Status = ()")).toEqual(['parse error on value ")" (CLOSE)']);
+    expect(errors("Status = (   )")).toEqual(['parse error on value ")" (CLOSE)']);
+  });
+
+  it("refuses an IN list that is unopened, unclosed, or empty", () => {
+    expect(errors("Status IN 5)")).toEqual(['parse error on value "5" (IDENTIFIER)']);
+    expect(errors("Status IN (open")).toEqual(["parse error: unexpected end of query"]);
+    expect(errors("Status IN (")).toEqual(["parse error: unexpected end of query"]);
+  });
+
+  it("refuses bare THIS CARD inside an IN list, where only THIS CARD.prop reads", () => {
+    expect(errors("Status IN (THIS CARD)")).toEqual([
+      'parse error on value "THIS CARD" (THIS_CARD)',
+    ]);
+    expect(where("Status IN (THIS CARD.Status)")).toMatchObject({
+      type: "in",
+      byNumber: false,
+      values: [{ type: "thisCardProperty", column: { property: { name: "Status" } } }],
+    });
+  });
+
+  it("refuses TAGGED WITH and IN PLAN without the name they take", () => {
+    expect(errors("tagged with =")).toEqual(['parse error on value "=" (OP)']);
+    expect(errors("IN PLAN =")).toEqual(['parse error on value "=" (OP)']);
+    expect(errors("IN PLAN")).toEqual(["parse error: unexpected end of query"]);
+  });
+
+  it("refuses a non-numeric value in a NUMBERS IN list, naming the value", () => {
+    expect(errors("Status NUMBERS IN (abc)")).toEqual([
+      "abc is not a valid value for Status. Only numbers can be used as values in a " +
+        "'column NUMBERS IN (...)' clause.",
+      "only card relationship properties or tree relationship properties can be used in " +
+        "'Status NUMBERS IN (...)' clause",
+    ]);
+  });
+});
+
+describe("parseMql — comparing one property against another", () => {
+  it("compares two properties of the same kind", () => {
+    expect(where("Iteration = PROPERTY Estimate")).toMatchObject({
+      column: { property: { name: "Iteration", kind: "number" } },
+      value: { type: "property", column: { property: { name: "Estimate", kind: "number" } } },
+    });
+    expect(where("Iteration > THIS CARD.Estimate")).toMatchObject({
+      operator: ">",
+      value: { type: "thisCardProperty", column: { property: { name: "Estimate" } } },
+    });
+  });
+
+  it("treats a formula as comparable with numbers and with dates, but nothing else", () => {
+    expect(where("Effort = PROPERTY Iteration")).toMatchObject({
+      column: { property: { name: "Effort", kind: "formula" } },
+      value: { column: { property: { name: "Iteration", kind: "number" } } },
+    });
+    expect(where("Effort = PROPERTY 'Due date'")).toMatchObject({
+      value: { column: { property: { name: "Due date", kind: "date" } } },
+    });
+    expect(where("Iteration = PROPERTY Effort")).toMatchObject({
+      column: { property: { name: "Iteration", kind: "number" } },
+      value: { column: { property: { name: "Effort", kind: "formula" } } },
+    });
+    expect(errors("Effort = PROPERTY Notes")).toEqual([
+      "Effort (formula) and Notes (text) are not the same type and cannot be compared.",
+    ]);
+    expect(errors("Notes = PROPERTY Effort")).toEqual([
+      "Notes (text) and Effort (formula) are not the same type and cannot be compared.",
+    ]);
+  });
+
+  it("refuses a cross-kind comparison, whether written as PROPERTY or THIS CARD", () => {
+    expect(errors("Iteration > PROPERTY 'Due date'")).toEqual([
+      "Iteration (number) and Due date (date) are not the same type and cannot be compared.",
+    ]);
+    expect(errors("Notes = PROPERTY Owner")).toEqual([
+      "Notes (text) and Owner (user) are not the same type and cannot be compared.",
+    ]);
+    expect(errors("Status = THIS CARD.Iteration")).toEqual([
+      "Status (enumerated) and Iteration (number) are not the same type and cannot be compared.",
+    ]);
+  });
+});

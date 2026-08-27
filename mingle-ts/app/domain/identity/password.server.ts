@@ -40,7 +40,31 @@ export function hashPassword(password: string): string {
 }
 
 /**
+ * Decodes one hex field of a stored hash.
+ *
+ * `Buffer.from(s, "hex")` stops silently at the first character it cannot
+ * read, so a corrupted field would otherwise decode to a short buffer —
+ * or an empty one — instead of announcing itself. This refuses anything
+ * that is not complete, even-length hex.
+ *
+ * @param hex - the field as stored
+ * @returns the decoded bytes, or null if the field is not whole hex
+ */
+function decodeHexField(hex: string): Buffer | null {
+  if (hex.length === 0 || hex.length % 2 !== 0) return null;
+  if (!/^[0-9a-f]+$/i.test(hex)) return null;
+  return Buffer.from(hex, "hex");
+}
+
+/**
  * Verifies a plaintext password against a stored hash string.
+ *
+ * Fails closed on every malformed input. The length floor matters as much
+ * as the comparison: `scryptSync` honours the key length it is given, so a
+ * stored hash truncated to zero bytes would derive zero bytes and compare
+ * equal to itself for *any* password. Deriving the length from the stored
+ * value is what lets cost parameters be raised later, so the floor — not
+ * the derivation — is what keeps that from becoming a bypass.
  *
  * @param password - plaintext candidate
  * @param stored - value from users.password_hash
@@ -51,9 +75,11 @@ export function verifyPassword(password: string, stored: string): boolean {
   const parts = stored.split(":");
   if (parts.length !== 6 || parts[0] !== "scrypt") return false;
   const [, nStr, rStr, pStr, saltHex, hashHex] = parts;
+  const salt = decodeHexField(saltHex);
+  const expected = decodeHexField(hashHex);
+  if (salt === null || expected === null || expected.length < KEY_LENGTH) return false;
   try {
-    const expected = Buffer.from(hashHex, "hex");
-    const actual = scryptSync(password, Buffer.from(saltHex, "hex"), expected.length, {
+    const actual = scryptSync(password, salt, expected.length, {
       N: Number(nStr),
       r: Number(rStr),
       p: Number(pStr),

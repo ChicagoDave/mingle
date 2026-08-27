@@ -207,6 +207,28 @@ describe("UpdateUserProfile", () => {
     expect(JSON.parse(events[0].payload)).toEqual({ changed: ["name", "email"] });
   });
 
+  it("names only the field that actually changed, not every field submitted", () => {
+    const id = reloadByLogin("dave.c")!.id;
+    updateUserProfile(db, { userId: id, name: VALID.name, email: "new@example.com" });
+    expect(JSON.parse(eventsOfType("UserProfileUpdated")[0].payload)).toEqual({
+      changed: ["email"],
+    });
+
+    db.delete(domainEvents).run();
+    updateUserProfile(db, { userId: id, name: "Dave", email: "new@example.com" });
+    expect(JSON.parse(eventsOfType("UserProfileUpdated")[0].payload)).toEqual({
+      changed: ["name"],
+    });
+  });
+
+  it("names nothing when a resubmit changes neither field", () => {
+    const id = reloadByLogin("dave.c")!.id;
+    updateUserProfile(db, { userId: id, name: VALID.name, email: VALID.email });
+    expect(JSON.parse(eventsOfType("UserProfileUpdated")[0].payload)).toEqual({
+      changed: [],
+    });
+  });
+
   it("accepts an email of exactly 255 characters, persisting it whole", () => {
     const email = "a".repeat(250) + "@e.co";
     expect(email).toHaveLength(255);

@@ -320,3 +320,45 @@ describe("renderPageContent — empty bodies", () => {
     expect(renderPageContent("", context())).toBe("");
   });
 });
+
+describe("sanitizePageContent — character entities", () => {
+  it("decodes decimal entities to text, then re-escapes what they spelled", () => {
+    expect(sanitizePageContent("<p>&#60;script&#62;alert(1)&#60;/script&#62;</p>")).toBe(
+      "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>",
+    );
+  });
+
+  it("decodes hex entities in either letter case", () => {
+    expect(sanitizePageContent("<p>&#x41;&#X42;&#x2014;</p>")).toBe("<p>AB—</p>");
+  });
+
+  it("leaves an out-of-range code point as the literal text it was written as", () => {
+    expect(sanitizePageContent("<p>&#x110000; &#0;</p>")).toBe(
+      "<p>&amp;#x110000; &amp;#0;</p>",
+    );
+  });
+
+  it("decodes an entity inside an attribute before the URL is judged safe", () => {
+    expect(sanitizePageContent('<p><a href="/x?a=1&#38;b=2">q</a></p>')).toBe(
+      '<p><a href="/x?a=1&amp;b=2">q</a></p>',
+    );
+    expect(sanitizePageContent('<p><a href="javascript&#58;alert(1)">q</a></p>')).toBe(
+      "<p><a>q</a></p>",
+    );
+  });
+});
+
+describe("sanitizePageContent — malformed markup", () => {
+  it("drops a doctype and a processing instruction, keeping what follows", () => {
+    expect(sanitizePageContent("<!DOCTYPE html><p>a</p>")).toBe("<p>a</p>");
+    expect(sanitizePageContent("<?php echo 1; ?><p>a</p>")).toBe("<p>a</p>");
+  });
+
+  it("drops an unterminated doctype rather than looping on it", () => {
+    expect(sanitizePageContent("<p>a</p><!unterminated")).toBe("<p>a</p>");
+  });
+
+  it("treats an unterminated tag as the literal text it is", () => {
+    expect(sanitizePageContent('<p>a</p><div class="x')).toBe('<p>a</p>&lt;div class=&quot;x');
+  });
+});

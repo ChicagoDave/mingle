@@ -20,7 +20,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { cards } from "../app/db/schema/cards";
 import { favorites } from "../app/db/schema/favorites";
@@ -42,10 +42,12 @@ import {
 } from "../app/domain/cards/list-view.server";
 import { buildGridView } from "../app/domain/cards/grid-view.server";
 import {
+  mqlCondition,
   queryCardsByMql,
   todayIso,
   type MqlEvaluationContext,
 } from "../app/domain/cards/mql-evaluator.server";
+import type { MqlCondition, MqlValue } from "../app/domain/cards/mql.server";
 import { parseProjectMql } from "../app/domain/cards/mql-schema.server";
 import { favoriteHref, saveFavorite } from "../app/domain/cards/favorites.server";
 import type { CommandResult } from "../app/domain/command.server";
@@ -429,5 +431,102 @@ describe("saveFavorite — MQL views", () => {
     });
     expect(result).toEqual({ ok: false, errors: { view: ["Card property 'Nope' does not exist!"] } });
     expect(db.select().from(favorites).all().length).toBe(before);
+  });
+});
+
+/**
+ * The evaluator's own refusals and its predefined-column arms. The
+ * 2026-08-27 mutation audit found these arms unreached: several are
+ * deliberate throws for MQL the parser accepts into an AST but no
+ * backing model can answer yet (tags, plans, card relationships,
+ * THIS CARD). They matter precisely because a later phase will teach
+ * the parser to accept them — at which point this evaluator must fail
+ * loudly rather than quietly translate them into wrong SQL.
+ *
+ * The conditions below are built directly, because `parseMql` rejects
+ * these constructs by name and so can never hand one to the evaluator
+ * today. The column references inside them are taken from real parses,
+ * not hand-written, so they stay honest about what a resolved ref is.
+ */
+describe("mqlCondition — predefined columns and unsupported constructs", () => {
+  /** The resolved column of a real parse, for reuse in built conditions. */
+  function columnOf(mql: string) {
+    const parsed = parseProjectMql(db, projectId, mql);
+    if (!parsed.ok) throw new Error(`${mql} → ${parsed.errors.join(" | ")}`);
+    const w = parsed.query.where;
+    if (!w || w.type !== "comparison") throw new Error(`${mql} is not a comparison`);
+    return w.column;
+  }
+
+  const evaluate = (cond: MqlCondition) => mqlCondition(db, projectId, cond, context);
+  const comparisonWith = (value: MqlValue): MqlCondition => ({
+    type: "comparison",
+    column: columnOf("Status = open"),
+    operator: "=",
+    value,
+  });
+
+  it("reads Modified On from the modified date, not the created date", () => {
+    // Every seeded card is created and modified today, which makes the two
+    // columns indistinguishable. Back-date one card's creation so they differ.
+    const card = db
+      .select()
+      .from(cards)
+      .where(and(eq(cards.projectId, projectId), eq(cards.number, 3)))
+      .get()!;
+    const createdOn = new Date(Date.UTC(2020, 0, 15));
+    db.update(cards).set({ createdAt: createdOn }).where(eq(cards.id, card.id)).run();
+    try {
+      expect(numbers("'Created On' = '2020-01-15'")).toEqual([3]);
+      expect(numbers(`'Created On' = '${TODAY}'`)).toEqual([1, 2, 4, 5, 6]);
+      expect(numbers(`'Modified On' = '${TODAY}'`)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(numbers("'Modified On' = '2020-01-15'")).toEqual([]);
+      expect(numbers(`'Modified On' > '${TODAY}'`)).toEqual([]);
+    } finally {
+      db.update(cards).set({ createdAt: card.createdAt }).where(eq(cards.id, card.id)).run();
+    }
+    expect(numbers(`'Created On' = '${TODAY}'`)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("refuses to compare against Project, which is a SELECT-only column", () => {
+    const parsed = parseProjectMql(db, projectId, "SELECT project");
+    if (!parsed.ok) throw new Error(parsed.errors.join(" | "));
+    const column = parsed.query.select!.columns[0];
+    if (column.type === "aggregate") throw new Error("expected a plain column");
+    expect(() =>
+      evaluate({ type: "comparison", column, operator: "=", value: { type: "null" } }),
+    ).toThrow("Project is not a comparable property");
+  });
+
+  it("refuses THIS CARD in either form, rather than translating it", () => {
+    expect(() => evaluate(comparisonWith({ type: "thisCard" }))).toThrow(
+      "THIS CARD is not supported in MQL filters.",
+    );
+    expect(() =>
+      evaluate(comparisonWith({ type: "thisCardProperty", column: columnOf("Status = open") })),
+    ).toThrow("THIS CARD is not supported in MQL filters.");
+  });
+
+  it("refuses a card-number value, which needs a card relationship property", () => {
+    expect(() => evaluate(comparisonWith({ type: "cardNumber", number: "5" }))).toThrow(
+      "card relationship properties are not available",
+    );
+  });
+
+  it("refuses NUMBERS IN, TAGGED WITH, and IN PLAN by name", () => {
+    expect(() =>
+      evaluate({
+        type: "in",
+        column: columnOf("Status = open"),
+        values: [{ type: "literal", text: "5", canonical: "5" }],
+        byNumber: true,
+      }),
+    ).toThrow("NUMBERS IN needs card relationship properties");
+    expect(() => evaluate({ type: "taggedWith", tag: "urgent" })).toThrow(
+      "TAGGED WITH needs card tags",
+    );
+    expect(() => evaluate({ type: "inPlan", plan: "Q3" })).toThrow(
+      "IN PLAN needs program plans",
+    );
   });
 });

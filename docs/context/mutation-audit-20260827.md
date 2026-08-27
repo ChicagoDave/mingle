@@ -105,29 +105,136 @@ no three-character string can reach the length bound and be accepted. The lower
 bound is unreachable — an equivalent mutant, not a gap. Leave it; the constant
 documents the legacy rule even though the format check subsumes it.
 
-## Finding 3 — changed-field lists in event payloads never asserted
+## Finding 3 — changed-field lists in event payloads never asserted — CLOSED
 
-`...(name !== current.name ? ["name"] : [])` and siblings survive inversion, so
-the emitted "which fields changed" payload is not asserted anywhere:
+`...(name !== current.name ? ["name"] : [])` and siblings survived at
 `identity/commands.server.ts:222`, `:223`; `projects/commands.server.ts:280`,
 `:281`, `:282`.
 
-## Finding 4 — no-coverage regions (199 mutants, 84 of them branch-shaped)
+The gap was **directional**, which is why the payload assertions that already
+existed did not close it. Forcing a condition to `false` was killed — a test did
+change every field and assert the full list. Forcing one to `true` was not: no
+fixture ever left a field *unchanged* while another moved, so "names only what
+changed" was never the thing under test. Four tests added:
 
-Whole branches no test executes at all. Concentrated in three places:
+| Command | Case added | Test file |
+|---|---|---|
+| `updateUserProfile` | email-only change, then name-only change | `test/identity.behavior.test.ts` |
+| `updateUserProfile` | resubmit changing neither field → `changed: []` | `test/identity.behavior.test.ts` |
+| `updateProjectSettings` | identifier + description move, name held | `test/projects.behavior.test.ts` |
+| `updateProjectSettings` | resubmit changing no field → `changed: []` | `test/projects.behavior.test.ts` |
 
-- `cards/mql.server.ts` — 25 sites, nearly all parser `this.fail(...)` error
-  paths (`:437`, `:506`, `:512`, `:575`, `:623`, `:633`, `:648`, `:663`, `:666`,
-  `:691`, `:697`, `:707`) plus type-check branches `:880`, `:912`, `:915`, `:979`.
-- `pages/content.server.ts` — the numeric-character-entity decoder (`:119`–`:123`,
-  including the entire `&#x`/`&#X` hex path) and the comment/doctype/unterminated-tag
-  skips (`:184`, `:186`, `:201`). This is the sanitizer, where untested means
-  unproven against exactly the input class ADR-0011 exists to defend.
-- `cards/mql-evaluator.server.ts` — unreached `case` arms: `modified_on`,
-  `project`, `!=`, `thisCard`, `cardNumber`, `taggedWith`, `inPlan` (`:158`–`:269`).
+All five sites were then re-checked in both directions; every mutant dies.
 
-Also `identity/password.server.ts:52`, `:62`, `:63` — the malformed-hash and
-scrypt-throws branches of verification, both security-relevant.
+## Finding 4 — no-coverage regions (199 mutants, 84 of them branch-shaped) — CLOSED
+
+Whole branches no test executed at all, in three concentrations. All reachable
+sites are now driven; the unreachable ones are named at the end of this section
+rather than chased.
+
+### `pages/content.server.ts` — the sanitizer (8 tests)
+
+The numeric-character-entity decoder (`:119`–`:123`, including the entire
+`&#x`/`&#X` hex path) and the comment/doctype/unterminated-tag skips (`:184`,
+`:186`, `:201`). Tests added to `test/page-content.behavior.test.ts`, asserting
+on rendered output:
+
+- decimal entities decode to text and are re-escaped on the way out
+  (`&#60;script&#62;` → `&lt;script&gt;`, never a live tag)
+- hex entities decode in either letter case (`&#x41;`, `&#X42;`)
+- an out-of-range code point (`&#x110000;`) and `&#0;` stay literal text
+- an entity inside an attribute decodes **before** the URL is judged safe
+  (`href="/x?a=1&#38;b=2"` survives; `href="javascript&#58;alert(1)"` loses
+  its href)
+- a doctype and a processing instruction are dropped, keeping what follows
+- an unterminated `<!…` is dropped rather than looped on
+- an unterminated tag degrades to the literal text it is
+
+Nine mutants applied and confirmed killed. One **equivalent**: dropping
+`Number.isFinite(code)` at `:123` survives and always will — the regex that
+selects the entity guarantees `[0-9a-f]+`, so `parseInt` cannot return NaN.
+The check documents the intent; it cannot fail.
+
+### `identity/password.server.ts` — verification (9 tests) — and a real defect
+
+`:52` (malformed stored hash) and `:62`/`:63` (scrypt throws) were unreached.
+New file `test/password.behavior.test.ts` drives them against real scrypt.
+
+**Writing the tests found a defect, not a gap.** `verifyPassword` returned
+**true for any password** against a stored hash whose final field was empty:
+
+```
+scrypt:16384:8:1:<salt>:        →  verifyPassword("anything at all", …) === true
+```
+
+`Buffer.from("", "hex")` is a zero-length buffer, so `expected.length` was 0,
+scrypt derived a zero-length key, and `timingSafeEqual` reported two empty
+buffers equal. A fail-open in the one function whose doc comment promises the
+opposite ("false for malformed/unknown stored formats"). Reachable only through
+a corrupted or hand-edited `users.password_hash` — `hashPassword` always emits
+128 hex characters — but the whole point of the malformed-input branch is the
+row nobody expected.
+
+**Fixed** in `verifyPassword`: a new `decodeHexField` helper refuses any field
+that is not complete, even-length hex (`Buffer.from` otherwise truncates
+silently at the first bad character), and verification now requires the decoded
+hash to be at least `KEY_LENGTH` bytes before comparing. Deriving the compare
+length from the stored value is what lets cost parameters be raised later, so
+the floor — not the derivation — is what keeps that from being a bypass.
+
+Six mutants confirmed killed, including the new floor. Three **equivalent**:
+each individual clause inside `decodeHexField` (empty, odd-length, non-hex)
+survives being dropped on its own, because the `KEY_LENGTH` floor catches the
+hash field and a corrupted salt merely derives a different key. They are
+defense in depth in the same sense as the authorization guards in Finding 1 —
+the set is load-bearing, no single clause is.
+
+### `cards/mql.server.ts` — parser refusal paths (14 tests)
+
+Every `this.fail(...)` the audit named is now driven from a malformed query,
+asserting the exact message: `PROPERTY` with no name after it (`:506`), a column
+that no token could name (`:512`, `:516`), a column with no operator (`:575`), a
+keyword where a value belongs (`:623`), `THIS CARD.` with nothing after the dot
+(`:633`), an empty project-variable parenthesis (`:648`), an IN list unopened /
+unclosed / empty (`:663`, `:697`), bare `THIS CARD` inside an IN list (`:666`),
+`AS OF` without a value (`:707`), a non-numeric value in `NUMBERS IN` (`:880`),
+and cross-kind property comparison including the formula rules (`:979`).
+
+Fourteen mutants confirmed killed. Four sites are **unreachable**, verified by
+replacing each with a `throw` and observing the suite stay green:
+
+- `:437` `else if (requireSelect) this.fail(…)` — `parseClauses(true)` is only
+  ever called from inside `if (this.at("SELECT"))`, so the `else` cannot run.
+- `:691` `next()`'s `!t` guard — every caller peeks before advancing.
+- `:912`, `:915` `passThrough` — invoked only for values already rejected, and
+  `parseMql` never returns a query when `errors` is non-empty, so its result is
+  unobservable.
+
+### `cards/mql-evaluator.server.ts` — unreached case arms (5 tests)
+
+`modified_on`, `project`, `thisCard`/`thisCardProperty`, `cardNumber`,
+`taggedWith`, `inPlan`, and `NUMBERS IN` (`:158`–`:270`), in
+`test/mql-filter.behavior.test.ts`.
+
+Most of these are deliberate throws for MQL that parses into an AST no backing
+model can answer yet. `parseMql` rejects those constructs by name, so it can
+never hand one to the evaluator today — the conditions are therefore built
+directly in the test, with their column references taken from real parses. That
+is the point of covering them: a later phase will teach the parser to accept
+tags, plans and card relationships, and when it does, this evaluator must fail
+loudly rather than quietly translate them into wrong SQL.
+
+`modified_on` needed more than execution to be *proven*. Every seeded card is
+created and modified on the same day, which makes `date(updatedAt)` and
+`date(createdAt)` indistinguishable — the arm ran, and swapping it to
+`createdAt` still passed. The test now back-dates one card's `createdAt`
+directly and asserts that `Created On` and `Modified On` select different sets,
+restoring the row afterwards. That is a seeded fixture, not a stub: the real
+evaluator still compiles real SQL against real rows.
+
+Seven mutants confirmed killed. `:184` (`operatorSql`'s `!=` arm) is
+**unreachable by type**: `compare` takes `Exclude<MqlOperator, "!=">`, and
+callers handle `!=` as the negation of `=`.
 
 ## State at end of session 39e7a3
 
@@ -135,10 +242,93 @@ Findings 1 and 2 closed — 18 tests added, 21 mutant-kills individually verifie
 4 mutants proved equivalent. Findings 3 and 4 recorded and untouched. Suite
 518 → **536 passing**, `npm run typecheck` clean, `npm run build` clean.
 
-The score above is the pre-fix baseline; re-run `npm run test:mutation` to
-measure the delta. Next is Finding 3 (five changed-field event-payload
-assertions), then Finding 4, whose sanitizer entity-decoder and password
-verification branches carry the most risk per test.
+## State at end of session 858a15
+
+Findings 3 and 4 closed. **40 tests added** across six files (one of them new),
+**42 distinct mutant-kills individually verified**, **9 mutants proved
+equivalent or unreachable**, and **one real defect found and fixed** — the
+empty-hash authentication fail-open in `verifyPassword` (Finding 4, password
+section).
+
+Suite 536 → **576 passing**, on the same basis as the 536 baseline (both exclude
+the live-stack `healthz.real` test). `npx tsc --noEmit` clean, `npm run build`
+clean.
+
+Per file: `password.behavior.test.ts` 9 (new), `mql.behavior.test.ts` 15,
+`page-content.behavior.test.ts` 7, `mql-filter.behavior.test.ts` 5,
+`identity.behavior.test.ts` 2, `projects.behavior.test.ts` 2.
+
+### Re-run: the measured delta
+
+`npm run test:mutation`, 18m16s, 5,967 mutants (up from 5,939 — the fix added
+source). Compared against this file's baseline:
+
+| | Baseline | After | Δ |
+|---|---|---|---|
+| **Mutation score, total** | 84.28% | **87.11%** | **+2.83** |
+| **Mutation score, covered** | 87.20% | **88.57%** | **+1.37** |
+| Killed | 4,930 | 5,118 | +188 |
+| Timeout (counts as killed) | 72 | 74 | +2 |
+| Survived | 734 | 670 | −64 |
+| **No coverage** | **199** | **98** | **−101** |
+| Runtime error | 4 | 7 | +3 |
+
+Every file the baseline called out as lowest-scoring moved:
+
+| File | Baseline | After |
+|---|---|---|
+| `identity/password.server.ts` | 59.09 | **82.00** |
+| `pages/content.server.ts` | 73.71 | **81.10** |
+| `cards/mql-evaluator.server.ts` | 73.04 | **79.94** |
+| `identity/commands.server.ts` | 75.48 | **80.29** |
+
+**The 98 remaining no-coverage mutants are not a Finding 4 remainder.** Finding 4
+named 199 as a total and then enumerated a subset — the three concentrations.
+Those enumerated sites are closed; the −101 is them. What is left is spread
+thin across files the finding never listed (`transitions` 21, `mql` 20,
+`formula` 15, `favorites` 6, `properties` 5, and a long tail), and has not been
+read or triaged. It is the honest starting point for a third pass, not an open
+item from this one.
+
+Two smaller things the re-run surfaced, neither acted on: runtime errors rose
+4 → 7, all in `mql.server.ts`, which are mutants that crash rather than being
+killed or surviving; and `mql-evaluator.server.ts` still scores lowest of the
+files touched, because its SELECT-projection and GROUP BY arms are deferred
+work, not gaps.
+
+### What is deliberately left
+
+Nothing from Findings 1–4 remains open. What was not chased, and why, is
+recorded in place: **9 equivalent or unreachable mutants** — one entity-decoder
+`isFinite` check, three `decodeHexField` clauses, four MQL parser sites
+(`:437`, `:691`, `:912`, `:915`), and the evaluator's `!=` operator arm — plus
+the 4 from the previous session, for **13 across both passes**. Eight of the
+nine were established by neutralize-and-observe; the evaluator's `!=` arm is
+unreachable *by type* (`compare` takes `Exclude<MqlOperator, "!=">`) and was
+read, not run. The survivors this
+audit never claimed — 259 `StringLiteral` and 70 `Regex` mutants over error text
+and character classes — are still survivors and still not the gap.
+
+**Whether mutation testing becomes a standing gate is still undecided** and
+still ADR-worthy. Two sessions of evidence now bear on it: the pass found one
+real authentication defect and, across both sessions, 12 mutants that no test
+should ever be written for. A gate would have to encode that distinction, which
+is an argument for keeping it report-only.
+
+### Two method notes from this session
+
+**A "no coverage" report and an "unkilled" report are different problems.** The
+`modified_on` arm was reported as uncovered; adding a query that reads it made
+it *covered* while leaving it *unproven*, because the fixture could not tell
+`updatedAt` from `createdAt`. Coverage says a line ran. Only a mutant says the
+line's specific behavior is pinned. Check the second, not the first.
+
+**Directional survivors hide behind existing assertions.** Finding 3's event
+payloads already had tests asserting the exact `changed` list, and the `false`
+direction of every mutant was already dead. Only the `true` direction survived,
+because no fixture held a field still while another moved. When a mutant
+survives on code that visibly has a test, the question is which *direction*
+the test constrains.
 
 **Method note worth carrying forward.** Four of the twenty-five sites this audit
 first called gaps turned out to be equivalent mutants — three redundant
