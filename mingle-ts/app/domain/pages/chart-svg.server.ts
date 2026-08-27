@@ -1,5 +1,6 @@
 /**
- * Shared SVG building blocks for the chart macros (Phase 18).
+ * Shared SVG building blocks for the chart macros (Phase 18, extended
+ * in Phase 19).
  *
  * Purpose: the node builders, the number formatting, and the categorical
  * palette every server-rendered chart uses. Extracted when the second
@@ -15,7 +16,7 @@
  * an element it never uses (ADR-0014).
  *
  * Public interface: `element`, `text`, `round`, `PALETTE`, `paletteColor`,
- * `parseColor`.
+ * `parseColor`, `niceMax`, `axisLabel`, `legendNodes`, `legendRows`.
  *
  * Owner context: Wiki & Content.
  */
@@ -88,4 +89,78 @@ export function text(value: string): ContentNode {
  */
 export function round(value: number): string {
   return (Math.round(value * 100) / 100).toString();
+}
+
+/**
+ * A round-ish axis maximum at or above the largest plotted value.
+ *
+ * Extracted from the daily history chart when the series charts needed
+ * the same scale: two charts on one page whose axes rounded differently
+ * would invite a reader to compare heights that are not comparable.
+ *
+ * @param max - the largest value to be plotted
+ * @returns a 1/2/5-times-a-power-of-ten bound, never below `max`, never 0
+ */
+export function niceMax(max: number): number {
+  if (!(max > 0)) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(max)));
+  const fraction = max / magnitude;
+  const step = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return step * magnitude;
+}
+
+/** Formats an axis value, keeping whole numbers whole. */
+export function axisLabel(value: number): string {
+  return Number.isInteger(value) ? String(value) : (Math.round(value * 100) / 100).toString();
+}
+
+/** Where a legend sits and how it wraps. */
+export interface LegendLayout {
+  x: number;
+  y: number;
+  /** Entries per row before wrapping. */
+  columns: number;
+  /** Horizontal distance between entries in a row. */
+  columnWidth: number;
+  /** Vertical distance between wrapped rows. */
+  rowHeight: number;
+}
+
+/**
+ * Builds a swatch-and-label legend.
+ *
+ * @param items - one entry per series or slice, in plotted order
+ * @param layout - origin, wrap width, and spacing
+ * @returns the swatch and text nodes, positioned absolutely
+ */
+export function legendNodes(
+  items: { label: string; color: string }[],
+  layout: LegendLayout,
+): ContentNode[] {
+  const nodes: ContentNode[] = [];
+  items.forEach((item, index) => {
+    const x = layout.x + (index % layout.columns) * layout.columnWidth;
+    const y = layout.y + Math.floor(index / layout.columns) * layout.rowHeight;
+    nodes.push(
+      element("rect", {
+        x: round(x), y: round(y - 8), width: "12", height: "12", rx: "2", fill: item.color,
+      }),
+    );
+    nodes.push(
+      element(
+        "text",
+        {
+          x: round(x + 18), y: round(y), "font-size": "12", fill: "#222222",
+          "dominant-baseline": "middle",
+        },
+        [text(item.label)],
+      ),
+    );
+  });
+  return nodes;
+}
+
+/** How many rows `legendNodes` will occupy for `count` entries. */
+export function legendRows(count: number, columns: number): number {
+  return Math.ceil(count / columns);
 }

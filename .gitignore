@@ -1,0 +1,8 @@
+# DevArch per-session state — machine-local, regenerated each session.
+# The durable record lives in committed session summaries, ADRs, and plans;
+# these files are scratch for one session's hooks and agents (ADR-0012).
+docs/context/.session-state-*.json
+docs/context/.active-session
+docs/context/.devarch-gate-*
+docs/context/.devarch-events-*.jsonl
+docs/context/archive/.devarch-events-*.jsonl

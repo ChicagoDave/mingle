@@ -39,7 +39,11 @@ import {
   type ContentNode,
 } from "~/domain/pages/content.server";
 import {
+  axisLabel,
   element,
+  legendNodes,
+  legendRows,
+  niceMax,
   paletteColor,
   parseColor,
   round,
@@ -219,20 +223,6 @@ function seriesValues(context: MacroContext, query: MqlQuery, days: string[]): n
   });
 }
 
-/** A round-ish axis maximum at or above the largest plotted value. */
-function niceMax(max: number): number {
-  if (!(max > 0)) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(max)));
-  const fraction = max / magnitude;
-  const step = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return step * magnitude;
-}
-
-/** Formats an axis value, keeping whole numbers whole. */
-function axisLabel(value: number): string {
-  return Number.isInteger(value) ? String(value) : (Math.round(value * 100) / 100).toString();
-}
-
 /**
  * `{{ daily-history-chart start-date: … end-date: … series: … }}`
  *
@@ -395,24 +385,12 @@ function render(params: MacroParams, days: string[], series: Series[]): ContentN
     }
   }
 
-  const legend: ContentNode[] = [];
-  series.forEach((s, index) => {
-    const y = padTop + plotH + 52 + Math.floor(index / 3) * 18;
-    const x = padLeft + (index % 3) * 180;
-    legend.push(
-      element("rect", { x: round(x), y: round(y - 8), width: "12", height: "12", rx: "2", fill: s.color }),
-    );
-    legend.push(
-      element(
-        "text",
-        { x: round(x + 18), y: round(y), "font-size": "12", fill: "#222222", "dominant-baseline": "middle" },
-        [text(s.label)],
-      ),
-    );
-  });
+  const legend = legendNodes(
+    series.map((s) => ({ label: s.label, color: s.color })),
+    { x: padLeft, y: padTop + plotH + 52, columns: 3, columnWidth: 180, rowHeight: 18 },
+  );
 
-  const legendRows = Math.ceil(series.length / 3);
-  const svgHeight = padTop + plotH + 52 + legendRows * 18 + 8;
+  const svgHeight = padTop + plotH + 52 + legendRows(series.length, 3) * 18 + 8;
   const summary = series
     .map((s) => `${s.label}: ${s.values.join(", ")}`)
     .join("; ");
