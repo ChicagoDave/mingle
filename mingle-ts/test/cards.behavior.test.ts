@@ -356,6 +356,12 @@ describe("createCard (CreateCard → CardCreated + version 1)", () => {
     expect(db.select().from(cardVersions).all()).toHaveLength(0);
   });
 
+  it("accepts a name of exactly 255 characters, persisting it whole", () => {
+    const name = "x".repeat(255);
+    const created = makeCard(name);
+    expect(db.select().from(cards).where(eq(cards.id, created.id)).get()!.name).toBe(name);
+  });
+
   it("rejects a name over 255 characters", () => {
     expectRejected(
       createCard(db, {

@@ -1,0 +1,3 @@
+{"ts":"2026-08-26T19:48:34Z","kind":"hook","source":"session-start","msg":"Session be9c66 started on main","detail":"previous session left PENDING in the plan — awaiting explicit user go-ahead per rule 5, not advanced to CURRENT by this summary.","branch":"main","session":"be9c66","gate":"session-init","budget":"0/350"}
+{"ts":"2026-08-26T19:52:33Z","kind":"agent","source":"post-tool-use","msg":"Agent completed","detail":"pre-session-audit","branch":"main","session":"be9c66","gate":"session-init","budget":"22/350"}
+{"ts":"2026-08-27T05:42:27Z","kind":"hook","source":"session-finalize","msg":"Session ended — event log archived","detail":"be9c66","branch":"main","session":"be9c66","gate":"","budget":"42/350"}

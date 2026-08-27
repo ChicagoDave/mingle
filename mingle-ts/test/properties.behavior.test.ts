@@ -280,6 +280,12 @@ describe("DefinePropertyDefinition", () => {
     expect(reloadDefinitions()).toHaveLength(0);
   });
 
+  it("accepts a name of exactly 40 characters, persisting it whole", () => {
+    const name = "x".repeat(40);
+    mustOk(define(name, "text"), "name at the limit");
+    expect(reloadDefinitions().map((d) => d.name)).toEqual([name]);
+  });
+
   it("rejects a case-insensitively taken name", () => {
     mustOk(define("Priority", "text"), "first define");
     const errors = mustReject(define("PRIORITY", "date"), "duplicate name");
@@ -299,6 +305,20 @@ describe("DefinePropertyDefinition", () => {
       "are only allowed for a managed list property",
     ]);
     expect(reloadDefinitions()).toHaveLength(0);
+  });
+
+  it("accepts an enumeration value of exactly 255 characters, persisting it whole", () => {
+    const value = "x".repeat(255);
+    const definition = mustOk(
+      define("Priority", "enumerated", [value]),
+      "enumeration value at the limit",
+    );
+    const stored = db
+      .select()
+      .from(enumerationValues)
+      .where(eq(enumerationValues.propertyDefinitionId, definition.id))
+      .all();
+    expect(stored.map((row) => row.value)).toEqual([value]);
   });
 
   it("rejects invalid enumeration values and persists nothing", () => {
@@ -622,6 +642,15 @@ describe("SetCardPropertyValue", () => {
       mustReject(set(defs.text.id, "(plv)"), "parens").value,
     ).toEqual(["Notes: value cannot both start with '(' and end with ')'"]);
     expectNothingMutated(1);
+  });
+
+  it("accepts a text value of exactly 255 characters, persisting it whole", () => {
+    const defs = defineAllKinds();
+    const value = "x".repeat(255);
+    mustOk(set(defs.text.id, value), "text value at the limit");
+    expect(reloadValues(reloadCard().id)).toEqual([
+      { propertyDefinitionId: defs.text.id, value },
+    ]);
   });
 
   it("rejects a no-change set: same value, numerically equal number, or clearing an unset property", () => {

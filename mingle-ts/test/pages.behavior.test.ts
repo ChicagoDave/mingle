@@ -577,6 +577,22 @@ describe("deletePage", () => {
     expect(reloadPage("Obsolete")).toBeUndefined();
   });
 
+  it("rejects an unknown project and deletes nothing", () => {
+    const created = seedPage("Obsolete");
+    expectRejected(
+      deletePage(db, {
+        projectId: projectId + 9999,
+        identifier: "Obsolete",
+        actorUserId: projectAdminId,
+      }),
+      "project",
+      "does not exist",
+    );
+    expect(reloadPage("Obsolete")).toBeDefined();
+    expect(versionsOf(created.id)).toHaveLength(1);
+    expect(eventsOfType("PageDeleted")).toHaveLength(0);
+  });
+
   it("rejects an identifier no page answers to", () => {
     expectRejected(
       deletePage(db, {

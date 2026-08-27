@@ -1,0 +1,2 @@
+{"ts":"2026-08-27T05:42:36Z","kind":"hook","source":"session-start","msg":"Session b236ae started on main","detail":"previous session left PENDING in the plan — awaiting explicit user go-ahead per rule 5, not advanced to CURRENT by this summary.","branch":"main","session":"b236ae","gate":"session-init","budget":"0/350"}
+{"ts":"2026-08-27T05:43:31Z","kind":"hook","source":"session-finalize","msg":"Session ended — event log archived","detail":"b236ae","branch":"main","session":"b236ae","gate":"","budget":"1/350"}

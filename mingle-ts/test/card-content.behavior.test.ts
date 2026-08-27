@@ -433,6 +433,15 @@ describe("addChecklistItem (AddChecklistItem → ChecklistItemAdded)", () => {
     );
   });
 
+  it("accepts text of exactly 255 characters, persisting it whole", () => {
+    const text = "x".repeat(255);
+    mustOk(
+      addChecklistItem(db, { projectId, cardNumber, text, actorUserId: memberId }),
+      "text at the limit",
+    );
+    expect(checklistOf().map((item) => item.text)).toEqual([text]);
+  });
+
   it("rejects text over 255 characters", () => {
     expectRejected(
       addChecklistItem(db, {

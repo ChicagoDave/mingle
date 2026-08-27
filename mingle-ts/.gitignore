@@ -9,3 +9,7 @@
 # Local SQLite database (DATABASE_FILE default is data/mingle.db;
 # created at runtime by app/db/client.server.ts, never committed).
 /data/
+
+# Stryker mutation reports (regenerate with `npm run test:mutation`).
+/reports/
+/.stryker-tmp/

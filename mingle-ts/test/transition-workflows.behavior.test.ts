@@ -758,6 +758,20 @@ describe("GenerateTransitionWorkflow", () => {
     expect(transitionRows()).toHaveLength(0);
   });
 
+  it("rejects an unknown project and writes no transition", () => {
+    const errors = mustReject(
+      generateTransitionWorkflow(db, {
+        projectId: projectId + 999,
+        cardTypeId: storyTypeId,
+        propertyDefinitionId: statusId,
+        actorUserId: projectAdminId,
+      }),
+      "unknown project",
+    );
+    expect(errors.project).toEqual(["does not exist"]);
+    expect(transitionRows()).toHaveLength(0);
+  });
+
   it("rejects an unknown card type", () => {
     const errors = mustReject(
       generateTransitionWorkflow(db, {
@@ -1223,6 +1237,21 @@ describe("ApplyCardPropertyValue", () => {
     expect(eventsOfType("CardPropertyValueSet")).toHaveLength(directWritesBefore);
   });
 
+  it("rejects an unknown project and changes no property value", () => {
+    const errors = mustReject(
+      applyCardPropertyValue(db, {
+        projectId: projectId + 999,
+        cardNumber: first,
+        propertyDefinitionId: estimateId,
+        value: "5",
+        actorUserId: memberId,
+      }),
+      "unknown project",
+    );
+    expect(errors.project).toEqual(["does not exist"]);
+    expect(reloadValues(first)[String(estimateId)]).toBeUndefined();
+  });
+
   it("rejects a formula property, an invalid value, an unknown card, and a readonly actor", () => {
     expect(
       mustReject(
@@ -1334,6 +1363,21 @@ describe("SetPropertyTransitionOnly", () => {
       }),
       "flag off",
     );
+    expect(reloadDefinition(statusId).transitionOnly).toBe(false);
+  });
+
+  it("rejects an unknown project and leaves the flag alone", () => {
+    expect(
+      mustReject(
+        setPropertyTransitionOnly(db, {
+          projectId: projectId + 999,
+          propertyDefinitionId: statusId,
+          transitionOnly: true,
+          actorUserId: projectAdminId,
+        }),
+        "unknown project",
+      ).project,
+    ).toEqual(["does not exist"]);
     expect(reloadDefinition(statusId).transitionOnly).toBe(false);
   });
 

@@ -115,6 +115,34 @@ describe("RegisterUser", () => {
     expect(eventsOfType("UserRegistered")).toHaveLength(1); // only the setup one
   });
 
+  it("accepts a login of exactly 1 and exactly 255 characters", () => {
+    expect(registerUser(db, { ...VALID, login: "a", email: "one@example.com" }).ok).toBe(true);
+    expect(reloadByLogin("a")).toBeDefined();
+
+    const longest = "b".repeat(255);
+    expect(registerUser(db, { ...VALID, login: longest, email: "long@example.com" }).ok).toBe(true);
+    expect(reloadByLogin(longest)!.login).toHaveLength(255);
+  });
+
+  it("accepts a password of exactly 5 and exactly 40 characters", () => {
+    expect(
+      registerUser(db, { ...VALID, login: "min", email: "min@example.com", password: "a1!bc" }).ok,
+    ).toBe(true);
+    const longest = "a1!" + "x".repeat(37);
+    expect(longest).toHaveLength(40);
+    expect(
+      registerUser(db, { ...VALID, login: "max", email: "max@example.com", password: longest }).ok,
+    ).toBe(true);
+    expect(db.select().from(users).all()).toHaveLength(2);
+  });
+
+  it("accepts an email of exactly 255 characters, persisting it whole", () => {
+    const email = "a".repeat(250) + "@e.co";
+    expect(email).toHaveLength(255);
+    expect(registerUser(db, { ...VALID, login: "longmail", email }).ok).toBe(true);
+    expect(reloadByLogin("longmail")!.email).toBe(email);
+  });
+
   it("rejects an email already used by another account, case-insensitively", () => {
     registerUser(db, VALID);
     const result = registerUser(db, {
@@ -177,6 +205,14 @@ describe("UpdateUserProfile", () => {
     const events = eventsOfType("UserProfileUpdated");
     expect(events).toHaveLength(1);
     expect(JSON.parse(events[0].payload)).toEqual({ changed: ["name", "email"] });
+  });
+
+  it("accepts an email of exactly 255 characters, persisting it whole", () => {
+    const email = "a".repeat(250) + "@e.co";
+    expect(email).toHaveLength(255);
+    const id = reloadByLogin("dave.c")!.id;
+    expect(updateUserProfile(db, { userId: id, name: "Dave", email }).ok).toBe(true);
+    expect(reloadByLogin("dave.c")!.email).toBe(email);
   });
 
   it("rejects an email owned by another user and leaves the row unchanged", () => {

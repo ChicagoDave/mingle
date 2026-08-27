@@ -421,6 +421,14 @@ describe("DefineTransition", () => {
     ]);
   });
 
+  it("accepts a name of exactly 255 characters, persisting it whole", () => {
+    const name = "x".repeat(255);
+    const row = mustOk(define({ name }), "name at the limit");
+    expect(
+      db.select().from(transitions).where(eq(transitions.id, row.id)).get()!.name,
+    ).toBe(name);
+  });
+
   describe("rejects, writing nothing, when", () => {
     const cases: [string, () => CommandResult<unknown>, string, RegExp][] = [
       ["the project is unknown", () => define({ projectId: 999_999 }), "project", /does not exist/],
@@ -604,6 +612,21 @@ describe("DeleteTransition", () => {
       "delete",
     );
     expect(errors.authorization?.[0]).toMatch(/Project administrator access/);
+    expect(transitionRowCounts()).toEqual(before);
+  });
+
+  it("rejects an unknown project and deletes nothing", () => {
+    const row = mustOk(define({}), "define");
+    const before = transitionRowCounts();
+    const errors = mustReject(
+      deleteTransition(db, {
+        projectId: 999_999,
+        transitionId: row.id,
+        actorUserId: projectAdminId,
+      }),
+      "unknown project",
+    );
+    expect(errors.project?.[0]).toBe("does not exist");
     expect(transitionRowCounts()).toEqual(before);
   });
 
@@ -1019,6 +1042,22 @@ describe("ExecuteTransition (REAL-PATH — exit criteria)", () => {
         "execute",
       );
       expect(errors.authorization?.[0]).toMatch(/Team member access/);
+      expect(cardState()).toEqual(before);
+    });
+
+    it("the project is unknown — checked before the transition is loaded", () => {
+      const row = mustOk(define({}), "define");
+      const before = cardState();
+      const errors = mustReject(
+        executeTransition(db, {
+          projectId: 999_999,
+          cardNumber,
+          transitionId: row.id,
+          actorUserId: memberId,
+        }),
+        "unknown project",
+      );
+      expect(errors.project?.[0]).toBe("does not exist");
       expect(cardState()).toEqual(before);
     });
 

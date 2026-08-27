@@ -191,6 +191,16 @@ describe("createProject (CreateProject → ProjectCreated)", () => {
     );
   });
 
+  it("accepts a name of exactly 255 and an identifier of exactly 30 characters", () => {
+    const name = "x".repeat(255);
+    const identifier = "a".repeat(30);
+    const created = makeProject(name, identifier);
+    const row = reloadByIdentifier(identifier)!;
+    expect(row.id).toBe(created.id);
+    expect(row.name).toBe(name);
+    expect(row.identifier).toBe(identifier);
+  });
+
   it("rejects an identifier with upper case or punctuation", () => {
     expectCreateRejected(
       { name: "P1", identifier: "Card-Wall" },

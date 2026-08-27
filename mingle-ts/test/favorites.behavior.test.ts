@@ -286,6 +286,12 @@ describe("SaveFavorite", () => {
     expect(db.select().from(favorites).all()).toEqual([]);
   });
 
+  it("accepts a name of exactly 255 characters, persisting it whole", () => {
+    const name = "x".repeat(255);
+    expect(saveTeamList(name).ok).toBe(true);
+    expect(findFavoriteByName(db, projectId, name, null)!.name).toBe(name);
+  });
+
   it("rejects view parameters that fail list-view validation, with the read model's messages", () => {
     const result = saveFavorite(db, {
       projectId,

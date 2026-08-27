@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Mutation-testing harness for the domain layer. Scope is app/domain/**/*.server.ts — the state-mutating code rule 12 Behavior Statements are written against. Surviving mutants name branches that type-check and are structurally present but that no seeded fixture drives at runtime: the exact gap pattern-recurrence-detector flagged across four sessions. Owner context: infrastructure (test tooling).",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "stryker.vitest.config.ts"
+  },
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "app/domain/**/*.server.ts"
+  ],
+  "ignorePatterns": [
+    "build",
+    "data",
+    ".react-router",
+    "reports"
+  ],
+  "reporters": [
+    "html",
+    "clear-text",
+    "progress"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/mutation.html"
+  },
+  "clearTextReporter": {
+    "allowColor": false,
+    "maxTestsToLog": 0
+  },
+  "timeoutMS": 60000,
+  "thresholds": {
+    "high": 90,
+    "low": 70,
+    "break": null
+  }
+}
