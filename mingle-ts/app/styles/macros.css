@@ -1,0 +1,80 @@
+/**
+ * Macro output styling (Phase 17).
+ *
+ * Purpose: gives the three shapes a macro can leave in a page — a
+ * table, a chart, and a refusal — enough structure to read as what
+ * they are. Every selector is scoped under a `.macro` class the macro
+ * modules emit, so nothing here reaches authored content that happens
+ * to use the same elements.
+ *
+ * The refusal styling is deliberate: a macro that cannot run says so
+ * in place, and it must not look like page text a reader would trust.
+ *
+ * Owner context: Wiki & Content (presentation).
+ */
+
+table.macro.table {
+  border-collapse: collapse;
+  margin: 1rem 0;
+  width: 100%;
+}
+
+table.macro.table th,
+table.macro.table td {
+  border: 1px solid #d7dbe0;
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+table.macro.table th {
+  background: #f2f4f6;
+  font-weight: 600;
+}
+
+table.macro.table td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.macro.table td.empty {
+  color: #6b7280;
+  font-style: italic;
+  text-align: center;
+}
+
+.macro.chart {
+  margin: 1rem 0;
+}
+
+.macro.chart svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.macro.chart .chart-title {
+  color: #374151;
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+
+.macro.chart.empty {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.macro.value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* A refusal must read as a refusal, not as page prose. */
+div.error.macro {
+  background: #fdf2f2;
+  border: 1px solid #e6b7b7;
+  border-radius: 3px;
+  color: #8a1f1f;
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+}

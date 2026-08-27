@@ -38,7 +38,7 @@ import {
 } from "~/domain/pages/naming.server";
 
 /** A parsed body node: either literal text or an element with children. */
-type ContentNode =
+export type ContentNode =
   | { kind: "text"; text: string }
   | {
       kind: "element";
@@ -93,6 +93,73 @@ const URL_ATTRS = new Set(["href", "src"]);
 
 /** Subtrees whose text is never linkified (legacy escape behaviour). */
 const NO_SUBSTITUTION_TAGS = new Set(["a", "code", "pre"]);
+
+// ------------------------------------------------- macro element policy
+
+/**
+ * The element rules one `clean` pass enforces. Authored bodies use
+ * AUTHORED_POLICY; macro output uses a widened one (see
+ * `registerMacroElements`), so a chart macro can emit `<svg>` without
+ * `<svg>` becoming legal in something a team member typed.
+ */
+interface ElementPolicy {
+  allowed: Set<string>;
+  dropSubtree: Set<string>;
+  tagAttrs: Record<string, Set<string>>;
+}
+
+/** What an authored page body may contain. */
+const AUTHORED_POLICY: ElementPolicy = {
+  allowed: ALLOWED_TAGS,
+  dropSubtree: DROP_SUBTREE,
+  tagAttrs: TAG_ATTRS,
+};
+
+/** Elements macros have declared, tag -> attributes beyond GLOBAL_ATTRS. */
+const MACRO_ELEMENTS = new Map<string, Set<string>>();
+
+/** Rebuilt whenever MACRO_ELEMENTS changes; null means "recompute". */
+let macroPolicy: ElementPolicy | null = null;
+
+/**
+ * Declares the elements and attributes a macro may emit.
+ *
+ * ADR-0011 Decision 7 requires macro output to be nodes inside the
+ * tree, and its consequences require those nodes to be *registered*
+ * rather than smuggled past the allowlist by editing it in place. This
+ * is that extension point: a macro module declares its tags once, at
+ * import time, and macro output is then cleaned against the authored
+ * allowlist widened by exactly those declarations — never trusted
+ * wholesale. A declared tag also leaves DROP_SUBTREE for macro output
+ * only, which is how `<svg>` becomes emittable by a chart macro while
+ * staying dropped from anything a person typed.
+ *
+ * @param spec - tag name -> attribute names permitted on that tag
+ * @returns nothing; the declaration is process-wide and additive
+ */
+export function registerMacroElements(spec: Record<string, string[]>): void {
+  for (const [tag, attrs] of Object.entries(spec)) {
+    const existing = MACRO_ELEMENTS.get(tag) ?? new Set<string>();
+    for (const attr of attrs) existing.add(attr);
+    MACRO_ELEMENTS.set(tag, existing);
+  }
+  macroPolicy = null;
+}
+
+/** The authored policy widened by every registered macro element. */
+function currentMacroPolicy(): ElementPolicy {
+  if (macroPolicy) return macroPolicy;
+  const allowed = new Set(ALLOWED_TAGS);
+  const dropSubtree = new Set(DROP_SUBTREE);
+  const tagAttrs: Record<string, Set<string>> = { ...TAG_ATTRS };
+  for (const [tag, attrs] of MACRO_ELEMENTS) {
+    allowed.add(tag);
+    dropSubtree.delete(tag);
+    tagAttrs[tag] = new Set([...(TAG_ATTRS[tag] ?? []), ...attrs]);
+  }
+  macroPolicy = { allowed, dropSubtree, tagAttrs };
+  return macroPolicy;
+}
 
 /**
  * Accepts only http, https and mailto absolute URLs plus same-document
@@ -246,20 +313,23 @@ function parseFragment(html: string): ContentNode[] {
  * removed entirely, and every surviving attribute is one this tag
  * permits — with URL attributes additionally scheme-checked.
  */
-function clean(nodes: ContentNode[]): ContentNode[] {
+function clean(
+  nodes: ContentNode[],
+  policy: ElementPolicy = AUTHORED_POLICY,
+): ContentNode[] {
   const out: ContentNode[] = [];
   for (const node of nodes) {
     if (node.kind === "text") {
       out.push(node);
       continue;
     }
-    if (DROP_SUBTREE.has(node.tag)) continue;
-    const children = clean(node.children);
-    if (!ALLOWED_TAGS.has(node.tag)) {
+    if (policy.dropSubtree.has(node.tag)) continue;
+    const children = clean(node.children, policy);
+    if (!policy.allowed.has(node.tag)) {
       out.push(...children);
       continue;
     }
-    const permitted = TAG_ATTRS[node.tag];
+    const permitted = policy.tagAttrs[node.tag];
     const attrs: Record<string, string> = {};
     for (const [name, value] of Object.entries(node.attrs)) {
       if (!GLOBAL_ATTRS.has(name) && !permitted?.has(name)) continue;
@@ -336,6 +406,20 @@ export interface PageRenderContext {
   /** True when the project has a card with this number. */
   cardExists: (projectIdentifier: string, cardNumber: number) => boolean;
 }
+
+/**
+ * Expands macros in a cleaned tree, adding each output root to `produced`.
+ *
+ * Declared as a callback rather than an import so the dependency runs
+ * macros -> content and never back: this module stays pure and knows
+ * nothing of the macro registry. The return type is `ContentNode[]`,
+ * not a string, which is what makes ADR-0011 Decision 7 unbreakable
+ * here rather than merely documented.
+ */
+export type MacroExpansion = (
+  nodes: ContentNode[],
+  produced: WeakSet<ContentNode>,
+) => ContentNode[];
 
 /** Matches `[[Page]]`, `[[display|Page]]` and `[[project/Page]]`. */
 const WIKI_LINK = /\[\[[\t ]*(?:([^|\]]+?)[\t ]*\|)?[\t ]*(?:([a-z0-9_-]+)[\t ]*\/[\t ]*)?([^\]]*?)[\t ]*\]\]/gi;
@@ -440,19 +524,33 @@ function substituteCardLinks(
   return out;
 }
 
-/** Walks the tree, linkifying text outside `<a>`, `<code>` and `<pre>`. */
-function linkify(nodes: ContentNode[], ctx: PageRenderContext): ContentNode[] {
+/**
+ * Walks the tree, linkifying text outside `<a>`, `<code>` and `<pre>`.
+ *
+ * `skip` holds macro output roots. Macro output is already final —
+ * a table cell holding a card name is not a place to go looking for
+ * `[[…]]` syntax — so those subtrees pass through untouched.
+ */
+function linkify(
+  nodes: ContentNode[],
+  ctx: PageRenderContext,
+  skip?: WeakSet<ContentNode>,
+): ContentNode[] {
   const out: ContentNode[] = [];
   for (const node of nodes) {
     if (node.kind === "text") {
       out.push(...substituteCardLinks(substituteWikiLinks(node.text, ctx), ctx));
       continue;
     }
+    if (skip?.has(node)) {
+      out.push(node);
+      continue;
+    }
     out.push({
       ...node,
       children: NO_SUBSTITUTION_TAGS.has(node.tag)
         ? node.children
-        : linkify(node.children, ctx),
+        : linkify(node.children, ctx, skip),
     });
   }
   return out;
@@ -471,9 +569,22 @@ function linkify(nodes: ContentNode[], ctx: PageRenderContext): ContentNode[] {
 export function renderPageContent(
   html: string | null,
   ctx: PageRenderContext,
+  expand?: MacroExpansion,
 ): string {
   if (!html) return "";
-  return serialize(linkify(clean(parseFragment(html)), ctx));
+  const authored = clean(parseFragment(html));
+  if (!expand) return serialize(linkify(authored, ctx));
+
+  // Order is the ADR-0011 Decision 7 constraint made concrete: macros
+  // produce nodes into the tree, those nodes are exempt from link
+  // substitution, and the whole tree passes the allowlist again —
+  // widened by exactly what macros declared — before serialization.
+  // Authored markup was already cleaned above, so widening the second
+  // pass cannot let an authored `<svg>` survive; only macro output
+  // reaches that pass carrying declared tags.
+  const produced = new WeakSet<ContentNode>();
+  const expanded = expand(authored, produced);
+  return serialize(clean(linkify(expanded, ctx, produced), currentMacroPolicy()));
 }
 
 /**

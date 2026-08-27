@@ -25,12 +25,13 @@
  * `conditionUsesThisCard` for callers to refuse up front.
  *
  * Public interface: `mqlCondition`, `queryCardsByMql`,
- * `conditionUsesThisCard`, `MqlEvaluationContext`, `todayIso`.
+ * `conditionUsesThisCard`, `mqlExpressions`, `MqlEvaluationContext`,
+ * `todayIso`.
  *
  * Owner context: Query (read model). Read-only — never writes.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableName, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { cards, cardTypes } from "~/db/schema/cards";
 import {
@@ -62,7 +63,8 @@ export function todayIso(now: Date = new Date()): string {
 }
 
 /** The cards table or a nested-query alias of it. */
-type CardsRef = typeof cards | ReturnType<typeof alias<typeof cards, string>>;
+/** The `cards` table, or an alias of it inside a correlated sub-select. */
+export type CardsRef = typeof cards | ReturnType<typeof alias<typeof cards, string>>;
 
 /** How a resolved property's values compare (predefined kinds folded in). */
 type CompareKind = ComparisonKind | "user" | "type";
@@ -141,22 +143,37 @@ class Evaluator {
 
   // -- expressions ------------------------------------------------------
 
-  /** A scalar SQL expression for the property's stored value on `c` (NULL when unset). */
-  private valueExpr(ref: PropertyRef, c: CardsRef): SQL {
+  /**
+   * A scalar SQL expression for the property's stored value on `c`
+   * (NULL when unset).
+   *
+   * Every reference to the outer `cards` row is written table-qualified
+   * rather than left to Drizzle. Drizzle qualifies columns inside a
+   * `sql` template in WHERE position but NOT in SELECT position, so an
+   * unqualified `${c.id}` inside a correlated subquery renders as a
+   * bare `"id"` in a select list — which SQLite happily resolves
+   * against the SUBQUERY's own table. The result is a legal query that
+   * silently reads another row's value. Qualifying makes the
+   * expression mean the same thing in either clause, which is what
+   * lets projection reuse the filters' translation at all.
+   */
+  valueExpr(ref: PropertyRef, c: CardsRef): SQL {
+    const own = (column: { name: string }): SQL =>
+      sql.raw(`"${getTableName(c)}"."${column.name}"`);
     if (ref.source === "defined") {
-      return sql`(select ${cardPropertyValues.value} from ${cardPropertyValues} where ${cardPropertyValues.cardId} = ${c.id} and ${cardPropertyValues.propertyDefinitionId} = ${ref.id})`;
+      return sql`(select ${cardPropertyValues.value} from ${cardPropertyValues} where ${cardPropertyValues.cardId} = ${own(c.id)} and ${cardPropertyValues.propertyDefinitionId} = ${ref.id})`;
     }
     switch (ref.key) {
       case "number":
-        return sql`${c.number}`;
+        return own(c.number);
       case "name":
-        return sql`${c.name}`;
+        return own(c.name);
       case "type":
-        return sql`(select ${cardTypes.name} from ${cardTypes} where ${cardTypes.id} = ${c.cardTypeId})`;
+        return sql`(select ${cardTypes.name} from ${cardTypes} where ${cardTypes.id} = ${own(c.cardTypeId)})`;
       case "created_on":
-        return sql`date(${c.createdAt} / 1000, 'unixepoch')`;
+        return sql`date(${own(c.createdAt)} / 1000, 'unixepoch')`;
       case "modified_on":
-        return sql`date(${c.updatedAt} / 1000, 'unixepoch')`;
+        return sql`date(${own(c.updatedAt)} / 1000, 'unixepoch')`;
       case "project":
         throw new Error("MQL evaluator: Project is not a comparable property");
     }
@@ -386,4 +403,41 @@ export function queryCardsByMql(
     .where(and(eq(cards.projectId, projectId), where))
     .orderBy(...order)
     .all();
+}
+
+/**
+ * The expression builder behind the filters, exposed so projection can
+ * reuse it.
+ *
+ * SELECT columns, GROUP BY and aggregates are deliberately not
+ * implemented here (see this module's header): they belong on top of
+ * this translation, not inside it. What they must NOT do is re-derive
+ * the unset semantics — a managed property's value living in a row or
+ * in no row at all — because two translations of that rule drift, and
+ * a filter and a table macro would then disagree about the same MQL.
+ * ADR-0006 settled the parse for every consumer on that reasoning; the
+ * builder is shared to carry it into SQL translation too (ADR-0014).
+ *
+ * @param db - Drizzle handle
+ * @param projectId - the project whose cards and definitions apply
+ * @param context - what CURRENT USER and TODAY bind to
+ * @returns `condition` (a WHERE predicate), `valueExpr` (a property's
+ *   scalar expression) and `orderExpr` (its ORDER BY expression), all
+ *   over the `cards` reference passed in
+ */
+export function mqlExpressions(
+  db: BetterSQLite3Database,
+  projectId: number,
+  context: MqlEvaluationContext,
+): {
+  condition: (cond: MqlCondition, c: CardsRef) => SQL;
+  valueExpr: (ref: PropertyRef, c: CardsRef) => SQL;
+  orderExpr: (ref: PropertyRef, c: CardsRef) => SQL;
+} {
+  const evaluator = new Evaluator(db, projectId, context);
+  return {
+    condition: (cond, c) => evaluator.condition(cond, c),
+    valueExpr: (ref, c) => evaluator.valueExpr(ref, c),
+    orderExpr: (ref, c) => evaluator.orderExpr(ref, c),
+  };
 }

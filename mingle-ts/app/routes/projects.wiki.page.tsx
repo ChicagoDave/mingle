@@ -25,6 +25,8 @@ import { projects } from "~/db/schema/projects";
 import { requireUserId } from "~/auth/session.server";
 import { deletePage } from "~/domain/pages/commands.server";
 import { renderPageContent } from "~/domain/pages/content.server";
+import { pageMacroExpansion } from "~/domain/pages/macros-registry.server";
+import "../styles/macros.css";
 import { pageNameFromIdentifier } from "~/domain/pages/naming.server";
 import {
   findPage,
@@ -75,7 +77,16 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     ...shell,
     exists: true as const,
     name: page.name,
-    content: renderPageContent(shown.content, pageRenderContext(db, project.identifier)),
+    content: renderPageContent(
+      shown.content,
+      pageRenderContext(db, project.identifier),
+      pageMacroExpansion({
+        projectIdentifier: project.identifier,
+        projectId: project.id,
+        db,
+        currentUserId: userId,
+      }),
+    ),
     version: shown.version,
     currentVersion: page.version,
     history: pageHistory(db, page.id),
