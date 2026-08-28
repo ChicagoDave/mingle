@@ -15,7 +15,10 @@
  * Every relationship write goes through `appendPropertyValueChanges`
  * (Phase 7's single version-append path), so a placement is one card
  * version per affected card and appears in history like any other
- * property change.
+ * property change. Membership changes that no relationship write
+ * reports — a belonging inserted or deleted, a card type leaving a
+ * tree — refresh the affected holders' aggregate properties (Phase 24)
+ * through `recomputeAggregatesFor` before the transaction ends.
  *
  * Commands → events:
  *   DefineTree         → TreeDefined
@@ -24,7 +27,11 @@
  *   ReconfigureTree    → TreeReconfigured (+ card versions for cards of removed types)
  *
  * Public interface: `defineTree`, `addCardToTree`, `removeCardFromTree`,
- * `reconfigureTree`.
+ * `reconfigureTree`, and — for the card commands, which own the card
+ * row but not its tree membership — `reviseTreesForCardTypeChange`
+ * (legacy `TreeConfiguration#handle_card_type_change`) and
+ * `removeDeletedCardFromTrees`, both run inside the caller's
+ * transaction.
  *
  * Owner context: Card Trees. Handlers take the Drizzle handle as a
  * parameter — no module-level infrastructure imports.
@@ -35,7 +42,13 @@ import { cards, cardTypes, type CardRow } from "~/db/schema/cards";
 import { projects } from "~/db/schema/projects";
 import { cardPropertyValues, propertyDefinitions } from "~/db/schema/properties";
 import { treeBelongings, treeCardTypes, treeConfigurations, type TreeConfigurationRow } from "~/db/schema/trees";
-import { appendPropertyValueChanges, propertyNameError, type PropertyValueChange } from "~/domain/cards/properties.server";
+import {
+  appendPropertyValueChanges,
+  propertyNameError,
+  recomputeAggregatesAround,
+  recomputeAggregatesFor,
+  type PropertyValueChange,
+} from "~/domain/cards/properties.server";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import { authorizeProjectAction, PrivilegeLevel } from "~/domain/identity/authorization.server";
@@ -364,6 +377,12 @@ export function addCardToTree(
         if (dChanges.length > 0) appendPropertyValueChanges(tx, input.projectId, descendant, dChanges, input.actorUserId);
       }
     }
+    // A move is fully reported by the relationship write above (both
+    // the old and the new ancestors are refreshed). A first placement is
+    // not: the belonging row is what makes the card count, and it did
+    // not exist when that write refreshed the ancestors — and the card
+    // may itself now hold aggregates.
+    if (!alreadyMember) recomputeAggregatesAround(tx, input.projectId, card.id);
     emitEvent(tx, {
       type: "CardAddedToTree",
       aggregateType: "TreeConfiguration",
@@ -415,7 +434,112 @@ function detachMember(
   tx.delete(treeBelongings)
     .where(and(eq(treeBelongings.treeConfigurationId, shape.tree.id), eq(treeBelongings.cardId, card.id)))
     .run();
+  // A card that left the tree carries none of its aggregates any more.
+  recomputeAggregatesFor(tx, projectId, [card.id, ...(withChildren ? descendants.map((d) => d.id) : [])]);
   return touched;
+}
+
+/**
+ * Keeps a card's trees consistent with a change of its card type,
+ * inside the caller's transaction (legacy
+ * `TreeConfiguration#handle_card_type_change`): in every tree the card
+ * belongs to, when the new type is not on the tree the card is removed
+ * with its children detached to its parent; when it is, the cards
+ * below that named it through its OLD type's relationship are detached
+ * to its parent (that relationship no longer describes it) and its own
+ * relationships at or below its NEW level are cleared, so it never
+ * names an ancestor at a level it now occupies. Each affected card
+ * gets one version. Call BEFORE the `cards` row takes the new type,
+ * with the row as it stands; the caller refreshes aggregates after.
+ *
+ * @param tx - the transaction the surrounding command is using
+ * @param projectId - the card's project
+ * @param card - the card row, still carrying the old type
+ * @param newCardTypeId - the type the card is changing to
+ * @param actorUserId - the user recorded on the versions appended
+ */
+export function reviseTreesForCardTypeChange(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  card: CardRow,
+  newCardTypeId: number,
+  actorUserId: number,
+): void {
+  if (card.cardTypeId === newCardTypeId) return;
+  const treeIds = tx
+    .select({ treeId: treeBelongings.treeConfigurationId })
+    .from(treeBelongings)
+    .where(eq(treeBelongings.cardId, card.id))
+    .all()
+    .map((row) => row.treeId);
+  for (const treeId of treeIds) {
+    const shape = loadTree(tx, projectId, treeId);
+    if (!shape) continue;
+    // Re-read: an earlier tree's revisions may have appended versions.
+    const current = findCard(tx, projectId, card.number);
+    if (!current) return;
+    const oldLevel = levelOf(shape, current.cardTypeId);
+    const newLevel = levelOf(shape, newCardTypeId);
+    if (newLevel < 0) {
+      detachMember(tx, shape, current, false, actorUserId);
+      continue;
+    }
+    const oldRelationship = oldLevel >= 0 ? shape.levels[oldLevel].relationship : null;
+    if (oldRelationship) {
+      for (const descendant of descendantsOf(tx, shape, current, oldLevel)) {
+        appendPropertyValueChanges(tx, projectId, descendant, [{ definition: oldRelationship, value: null }], actorUserId);
+      }
+    }
+    const ancestry = relationshipValues(tx, shape, [current.id]).get(current.id) ?? new Map<number, number>();
+    const changes: PropertyValueChange[] = [];
+    for (const level of shape.levels) {
+      if (level.position >= newLevel && level.relationship && ancestry.has(level.position)) {
+        changes.push({ definition: level.relationship, value: null });
+      }
+    }
+    if (changes.length > 0) appendPropertyValueChanges(tx, projectId, current, changes, actorUserId);
+  }
+}
+
+/**
+ * Takes a card that is being deleted out of every tree it belongs to,
+ * inside the caller's transaction: the cards below it that named it
+ * are detached to its parent (one version each — they moved), and its
+ * belonging rows are deleted. The card's own relationship values are
+ * left for the deletion to remove with the rest of its values, and no
+ * version is appended to it — the deletion version is the caller's.
+ *
+ * @param tx - the transaction the surrounding command is using
+ * @param projectId - the card's project
+ * @param card - the card about to be deleted
+ * @param actorUserId - the user recorded on the descendants' versions
+ */
+export function removeDeletedCardFromTrees(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  card: CardRow,
+  actorUserId: number,
+): void {
+  const treeIds = tx
+    .select({ treeId: treeBelongings.treeConfigurationId })
+    .from(treeBelongings)
+    .where(eq(treeBelongings.cardId, card.id))
+    .all()
+    .map((row) => row.treeId);
+  for (const treeId of treeIds) {
+    const shape = loadTree(tx, projectId, treeId);
+    if (!shape) continue;
+    const level = levelOf(shape, card.cardTypeId);
+    const relationship = level >= 0 ? shape.levels[level].relationship : null;
+    if (relationship) {
+      for (const descendant of descendantsOf(tx, shape, card, level)) {
+        appendPropertyValueChanges(tx, projectId, descendant, [{ definition: relationship, value: null }], actorUserId);
+      }
+    }
+    tx.delete(treeBelongings)
+      .where(and(eq(treeBelongings.treeConfigurationId, treeId), eq(treeBelongings.cardId, card.id)))
+      .run();
+  }
 }
 
 export interface RemoveCardFromTreeInput {
@@ -645,6 +769,26 @@ export function reconfigureTree(
     typeIds.forEach((cardTypeId, position) => {
       tx.insert(treeCardTypes).values({ treeConfigurationId: shape.tree.id, cardTypeId, position }).run();
     });
+    // Aggregates (Phase 24) whose holder type is no longer a non-leaf
+    // level, or whose scope type is no longer below it, describe a
+    // shape that no longer exists and go with it (legacy
+    // update_or_destroy_by). The survivors need no refresh: every card
+    // that left did so through detachMember, which refreshed its holders.
+    const aggregates = tx
+      .select()
+      .from(propertyDefinitions)
+      .where(and(eq(propertyDefinitions.treeConfigurationId, shape.tree.id), eq(propertyDefinitions.kind, "aggregate")))
+      .all();
+    const removedAggregateNames: string[] = [];
+    for (const aggregate of aggregates) {
+      const holderIndex = typeIds.indexOf(aggregate.aggregateCardTypeId ?? -1);
+      const scopeIndex = aggregate.aggregateScopeCardTypeId === null ? null : typeIds.indexOf(aggregate.aggregateScopeCardTypeId);
+      const valid = holderIndex >= 0 && holderIndex < typeIds.length - 1 && (scopeIndex === null || scopeIndex > holderIndex);
+      if (valid) continue;
+      tx.delete(cardPropertyValues).where(eq(cardPropertyValues.propertyDefinitionId, aggregate.id)).run();
+      tx.delete(propertyDefinitions).where(eq(propertyDefinitions.id, aggregate.id)).run();
+      removedAggregateNames.push(aggregate.name);
+    }
     const tree = tx
       .update(treeConfigurations)
       .set({ name, description: input.description?.trim() || null, updatedAt: new Date() })
@@ -655,7 +799,7 @@ export function reconfigureTree(
       type: "TreeReconfigured",
       aggregateType: "TreeConfiguration",
       aggregateId: tree.id,
-      payload: { projectId: input.projectId, name, cardTypeIds: typeIds, relationshipNames, removedCardNumbers },
+      payload: { projectId: input.projectId, name, cardTypeIds: typeIds, relationshipNames, removedCardNumbers, removedAggregateNames },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: tree } as CommandResult<TreeConfigurationRow>;

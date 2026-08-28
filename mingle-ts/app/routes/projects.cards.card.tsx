@@ -544,10 +544,10 @@ export default function CardPage() {
         <p>No properties defined. Define them in project settings.</p>
       ) : (
         properties.map((property) =>
-          property.kind === "formula" ? (
+          property.kind === "formula" || property.kind === "aggregate" ? (
             <p key={property.id}>
               {property.name}: {property.value ?? "(not set)"}{" "}
-              <small>(formula)</small>
+              <small>({property.kind})</small>
             </p>
           ) : property.kind === "tree_relationship" ? (
             // Placement is structural (ancestors inherited, descendants

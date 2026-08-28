@@ -474,10 +474,10 @@ export function applyCardPropertyValue(
   if (!card) return reject("card", "does not exist");
   const definition = findDefinition(db, input.projectId, input.propertyDefinitionId);
   if (!definition) return reject("property", "does not exist");
-  if (definition.kind === "formula")
+  if (definition.kind === "formula" || definition.kind === "aggregate")
     return reject(
       "property",
-      `${definition.name} is a formula property and cannot be set directly`,
+      `${definition.name} is a ${definition.kind} property and cannot be set directly`,
     );
 
   const raw = input.value?.trim() || null;

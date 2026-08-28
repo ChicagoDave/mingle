@@ -7,7 +7,9 @@
  * detached to its parent) or remove it with its subtree, a form to
  * add a card under a parent or at the root, and — for a project admin —
  * the reconfigure form (legacy card_trees/edit) that renames the tree
- * or changes its chain of card types.
+ * or changes its chain of card types, plus the tree's aggregate
+ * properties (Phase 24; legacy card_trees "aggregate properties"
+ * panel) with a form to define one on a non-leaf card type.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -20,6 +22,9 @@ import { requireUserId } from "~/auth/session.server";
 import { db } from "~/db/client.server";
 import { cardTypes } from "~/db/schema/cards";
 import { projects } from "~/db/schema/projects";
+import { propertyDefinitions } from "~/db/schema/properties";
+import { AGGREGATE_TYPE_LABELS, AGGREGATE_TYPES, type AggregateType } from "~/shared/wire-types";
+import { defineAggregateProperty } from "~/domain/cards/properties.server";
 import { PrivilegeLevel, privilegeLevelFor } from "~/domain/identity/authorization.server";
 import { addCardToTree, reconfigureTree, removeCardFromTree } from "~/domain/trees/commands.server";
 import { loadTree, treeHierarchy, type TreeNode } from "~/domain/trees/read.server";
@@ -38,6 +43,23 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (!project) throw new Response("Not Found", { status: 404 });
   const shape = loadTree(db, project.id, treeIdOf(params));
   if (!shape) throw new Response("Not Found", { status: 404 });
+  const definitions = db
+    .select({
+      id: propertyDefinitions.id,
+      name: propertyDefinitions.name,
+      kind: propertyDefinitions.kind,
+      treeConfigurationId: propertyDefinitions.treeConfigurationId,
+      aggregateType: propertyDefinitions.aggregateType,
+      aggregateTargetId: propertyDefinitions.aggregateTargetId,
+      aggregateCardTypeId: propertyDefinitions.aggregateCardTypeId,
+      aggregateScopeCardTypeId: propertyDefinitions.aggregateScopeCardTypeId,
+      aggregateCondition: propertyDefinitions.aggregateCondition,
+    })
+    .from(propertyDefinitions)
+    .where(eq(propertyDefinitions.projectId, project.id))
+    .orderBy(asc(propertyDefinitions.position))
+    .all();
+  const typeName = (id: number | null) => shape.levels.find((l) => l.cardTypeId === id)?.cardTypeName ?? null;
   return {
     project: { name: project.name, identifier: project.identifier },
     tree: { id: shape.tree.id, name: shape.tree.name, description: shape.tree.description },
@@ -56,6 +78,23 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .all(),
     canReconfigure: privilegeLevelFor(db, userId, project.id) >= PrivilegeLevel.PROJECT_ADMIN,
     maxLevels: MAX_TREE_LEVELS,
+    aggregates: definitions
+      .filter((d) => d.kind === "aggregate" && d.treeConfigurationId === shape.tree.id)
+      .map((d) => ({
+        id: d.id,
+        name: d.name,
+        aggregateType: d.aggregateType as AggregateType,
+        holderTypeName: typeName(d.aggregateCardTypeId),
+        targetName: definitions.find((t) => t.id === d.aggregateTargetId)?.name ?? null,
+        scopeTypeName: d.aggregateScopeCardTypeId === null ? null : typeName(d.aggregateScopeCardTypeId),
+        condition: d.aggregateCondition,
+      })),
+    // Targets: number properties and formulas (the command rejects a
+    // date-valued formula by name, so the list need not compile them).
+    targetCandidates: definitions
+      .filter((d) => d.kind === "number" || d.kind === "formula")
+      .map((d) => ({ id: d.id, name: d.name })),
+    aggregateTypes: AGGREGATE_TYPES.map((type) => ({ value: type, label: AGGREGATE_TYPE_LABELS[type] })),
   };
 }
 
@@ -72,6 +111,24 @@ export async function action({ request, params }: Route.ActionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
   const here = `/projects/${project.identifier}/trees/${treeId}`;
+
+  if (intent === "define-aggregate") {
+    const targetRaw = String(form.get("target") ?? "").trim();
+    const scopeRaw = String(form.get("scope") ?? "").trim();
+    const result = defineAggregateProperty(db, {
+      projectId: project.id,
+      name: String(form.get("name") ?? ""),
+      treeId,
+      aggregateCardTypeId: Number(form.get("aggregate_card_type")),
+      aggregateType: String(form.get("aggregate_type") ?? ""),
+      targetPropertyDefinitionId: targetRaw === "" ? null : Number(targetRaw),
+      scopeCardTypeId: scopeRaw === "" ? null : Number(scopeRaw),
+      condition: String(form.get("condition") ?? ""),
+      actorUserId: userId,
+    });
+    if (!result.ok) return data({ ok: false as const, errors: result.errors }, { status: 400 });
+    throw redirect(here);
+  }
 
   if (intent === "reconfigure") {
     const result = reconfigureTree(db, {
@@ -141,7 +198,7 @@ function Node({ node, base }: { node: TreeNode; base: string }) {
 
 /** Hierarchy view (legacy cards hierarchy style). */
 export default function TreeHierarchy() {
-  const { project, tree, levels, nodes, cardTypes: types, canReconfigure, maxLevels } =
+  const { project, tree, levels, nodes, cardTypes: types, canReconfigure, maxLevels, aggregates, targetCandidates, aggregateTypes } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors = actionData && !actionData.ok ? Object.values(actionData.errors).flat() : [];
@@ -195,6 +252,91 @@ export default function TreeHierarchy() {
         </label>{" "}
         <button type="submit">Add to tree</button>
       </Form>
+
+      <h2>Aggregate properties</h2>
+      {aggregates.length === 0 ? (
+        <p>No aggregate properties are defined on this tree.</p>
+      ) : (
+        <ul id="tree-aggregates">
+          {aggregates.map((aggregate) => (
+            <li key={aggregate.id}>
+              <strong>{aggregate.name}</strong> on {aggregate.holderTypeName}:{" "}
+              {aggregateTypes.find((t) => t.value === aggregate.aggregateType)?.label ?? aggregate.aggregateType}
+              {aggregate.targetName ? ` of ${aggregate.targetName}` : ""} over{" "}
+              {aggregate.scopeTypeName ? `${aggregate.scopeTypeName} cards` : "all descendants"}
+              {aggregate.condition ? (
+                <>
+                  {" "}
+                  where <code>{aggregate.condition}</code>
+                </>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canReconfigure && (
+        <Form method="post" id="define-aggregate">
+          <input type="hidden" name="intent" value="define-aggregate" />
+          <p>
+            <label>
+              Name <input name="name" type="text" required />
+            </label>{" "}
+            <label>
+              on{" "}
+              <select name="aggregate_card_type" required>
+                {levels
+                  .filter((level) => level.relationshipName !== null)
+                  .map((level) => (
+                    <option key={level.cardTypeId} value={level.cardTypeId}>
+                      {level.cardTypeName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </p>
+          <p>
+            <label>
+              Function{" "}
+              <select name="aggregate_type">
+                {aggregateTypes.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>{" "}
+            <label>
+              of property{" "}
+              <select name="target">
+                <option value="">(none — count only)</option>
+                {targetCandidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+              </select>
+            </label>{" "}
+            <label>
+              over{" "}
+              <select name="scope">
+                <option value="">All descendants</option>
+                {levels.slice(1).map((level) => (
+                  <option key={level.cardTypeId} value={level.cardTypeId}>
+                    {level.cardTypeName} cards
+                  </option>
+                ))}
+              </select>
+            </label>
+          </p>
+          <p>
+            <label>
+              Condition (optional MQL, e.g. <code>Status = Closed</code>){" "}
+              <input name="condition" type="text" size={50} />
+            </label>
+          </p>
+          <button type="submit">Define aggregate</button>
+        </Form>
+      )}
 
       {canReconfigure && (
         <>

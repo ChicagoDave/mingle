@@ -46,7 +46,13 @@ import {
   cardChecklistItems,
 } from "~/db/schema/card-content";
 import { cardPropertyValues } from "~/db/schema/properties";
-import { cardPropertySnapshot } from "~/domain/cards/properties.server";
+import {
+  aggregateHoldersOf,
+  cardPropertySnapshot,
+  recomputeAggregatesAround,
+  recomputeAggregatesFor,
+} from "~/domain/cards/properties.server";
+import { removeDeletedCardFromTrees, reviseTreesForCardTypeChange } from "~/domain/trees/commands.server";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
@@ -285,6 +291,14 @@ export interface UpdateCardInput {
  * DOES: updates the `cards` row (version incremented, modified stamps
  * set), inserts the matching `card_versions` snapshot, and appends a
  * CardUpdated event naming the changed fields, all in one transaction.
+ * When the type changes, first keeps the card's trees consistent
+ * (Phase 24, legacy `handle_card_type_change`): it leaves any tree the
+ * new type is not on — children detached to its parent — and in the
+ * trees it stays on, cards that named it through its old type detach
+ * and its own relationships at or below its new level clear (one
+ * version per affected card, via the tree commands); then refreshes
+ * the aggregate values it and its ancestors carry, since its type
+ * decides which aggregates it holds and which it counts toward.
  * REJECTS: unknown project or card, actor below full team member,
  * blank or over-long name, a card type not belonging to the project,
  * or no actual change (a version records a change; legacy skipped
@@ -324,7 +338,11 @@ export function updateCard(
   if (changed.length === 0) return reject("card", "has no changes to save");
 
   return db.transaction((tx) => {
-    const nextVersion = current.version + 1;
+    const typeChanged = cardType.id !== current.cardTypeId;
+    if (typeChanged) reviseTreesForCardTypeChange(tx, input.projectId, current, cardType.id, input.actorUserId);
+    // The tree revision may have appended versions to this card.
+    const latest = typeChanged ? (findCard(tx, input.projectId, current.number) ?? current) : current;
+    const nextVersion = latest.version + 1;
     const row = tx
       .update(cards)
       .set({
@@ -352,6 +370,7 @@ export function updateCard(
         modifiedByUserId: input.actorUserId,
       })
       .run();
+    if (typeChanged) recomputeAggregatesAround(tx, input.projectId, current.id);
     scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardUpdated",
@@ -373,10 +392,13 @@ export interface DeleteCardInput {
 /**
  * DeleteCard — deletes a card, keeping its history.
  *
- * DOES: deletes the `cards` row along with the card's checklist items,
+ * DOES: takes the card out of every tree it belongs to (Phase 24:
+ * cards below it detach to its parent with one version each, its
+ * belonging rows go), deletes the `cards` row along with the card's checklist items,
  * attachment rows, and property value rows (legacy dependent-destroy
  * parity; attachment BYTES are the caller's cleanup via the deleted
- * rows' fileKeys), keeps
+ * rows' fileKeys), refreshes the aggregate values of the ancestors it
+ * counted toward, keeps
  * every existing `card_versions` row, appends a final deletion version
  * (next version number, name and type snapshot retained, description
  * empty — legacy create_card_deletion_version parity — isDeletion
@@ -408,6 +430,8 @@ export function deleteCard(
   const cardType = findCardType(db, input.projectId, current.cardTypeId);
 
   return db.transaction((tx) => {
+    const holders = aggregateHoldersOf(tx, input.projectId, current.id);
+    removeDeletedCardFromTrees(tx, input.projectId, current, input.actorUserId);
     tx.insert(cardVersions)
       .values({
         cardId: current.id,
@@ -430,6 +454,7 @@ export function deleteCard(
       .where(eq(cardPropertyValues.cardId, current.id))
       .run();
     tx.delete(cards).where(eq(cards.id, current.id)).run();
+    recomputeAggregatesFor(tx, input.projectId, holders);
     scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardDeleted",

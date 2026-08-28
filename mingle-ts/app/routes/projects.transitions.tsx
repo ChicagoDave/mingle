@@ -100,7 +100,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(propertyDefinitions.projectId, project.id))
     .orderBy(asc(propertyDefinitions.position))
     .all()
-    .filter((definition) => definition.kind !== "formula");
+    .filter((definition) => definition.kind !== "formula" && definition.kind !== "aggregate");
   const allowedValues = db
     .select({
       propertyDefinitionId: enumerationValues.propertyDefinitionId,

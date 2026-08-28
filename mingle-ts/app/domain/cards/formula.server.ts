@@ -29,7 +29,9 @@
  * trailing zeros trimmed, dates as ISO yyyy-mm-dd.
  *
  * Public interface: `compileFormula`, `CompiledFormula`,
- * `FormulaPropertyShape`.
+ * `FormulaPropertyShape`, and `formatNumber` — the canonical numeric
+ * form, shared with the aggregate engine so a sum and a formula over
+ * the same cards never disagree about how "7.50" is written.
  *
  * Owner context: Card Management. Pure module — no database, no
  * infrastructure imports; callers supply property shapes and values.
@@ -250,6 +252,15 @@ function typeCheck(
         );
         return null;
       }
+      if (property.kind === "aggregate") {
+        // Legacy let formulas read aggregates (dependant_formulas); the
+        // cross-card recomputation order that needs is deferred, so the
+        // reference is refused by name rather than computed stale.
+        errors.push(
+          `Property ${property.name} is an aggregate property and cannot be used within a formula.`,
+        );
+        return null;
+      }
       if (property.kind === "number") return "number";
       if (property.kind === "date") return "date";
       errors.push(`Property ${property.name} is not numeric.`);
@@ -382,8 +393,21 @@ function evaluate(
 function format(value: Value): string | null {
   if (value === null) return null;
   if (value.kind === "date") return value.d.toISOString().slice(0, 10);
-  if (!Number.isFinite(value.n)) return null;
-  const rounded = value.n.toFixed(2);
+  return formatNumber(value.n);
+}
+
+/**
+ * The canonical stored form of a computed number: rounded to 2
+ * decimals (legacy default project precision) with trailing zeros
+ * trimmed, so "7.50" is stored as "7.5" and "3.00" as "3".
+ *
+ * @param n - the computed number
+ * @returns the canonical string, or null when not finite (division by
+ *   zero, overflow) — an unset value, never an error
+ */
+export function formatNumber(n: number): string | null {
+  if (!Number.isFinite(n)) return null;
+  const rounded = n.toFixed(2);
   return rounded.includes(".")
     ? rounded.replace(/\.?0+$/, "") || "0"
     : rounded;

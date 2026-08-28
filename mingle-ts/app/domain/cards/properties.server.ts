@@ -1,11 +1,11 @@
 /**
- * Card Management command handlers — managed card properties (Phase 7)
- * and formula properties (Phase 8).
+ * Card Management command handlers — managed card properties (Phase 7),
+ * formula properties (Phase 8) and aggregate properties (Phase 24).
  *
  * Purpose: the only write path for property definitions, their
  * enumeration values, and card property values. Definitions carry a
  * `kind` discriminator (text | number | date | user | enumerated |
- * formula); values are validated per kind against the legacy rules
+ * formula | tree_relationship | aggregate); values are validated per kind against the legacy rules
  * (property_definition.rb, property_type.rb, enumeration_value.rb,
  * user_property_definition.rb) and never silently coerced. Formula
  * definitions are compiled (parse + type-check) at definition time via
@@ -18,15 +18,32 @@
  * update or delete a version) with the full property snapshot, and
  * emits a past-tense event — or rejects (rule 10).
  *
+ * Aggregate properties (Phase 24) are the second derived kind: defined
+ * on a card tree for one of its non-leaf card types, computed by the
+ * aggregate engine over a holder card's member descendants, and
+ * materialized into `card_property_values` like formula values. They
+ * are recomputed in the SAME transaction as whatever changed a
+ * descendant — a value edit, a placement, a removal, a type change, a
+ * deletion — so the ancestor is correct on the next read. Unlike a
+ * formula, the refresh lands on a DIFFERENT card than the one edited,
+ * and it appends NO version to that holder (legacy
+ * `bypass_versioning`): the trail records what a user did to a card,
+ * and a story's estimate changing is not an edit of its release.
+ *
  * Commands → events:
  *   DefinePropertyDefinition   → PropertyDefinitionDefined
+ *   DefineAggregateProperty    → PropertyDefinitionDefined (kind aggregate)
  *   SetCardPropertyValue       → CardPropertyValueSet (+ next card version)
  *   SetPropertyTransitionOnly  → PropertyDefinitionTransitionOnlySet
  *
- * Public interface: `definePropertyDefinition`, `setCardPropertyValue`,
- * `setPropertyTransitionOnly`,
+ * Public interface: `definePropertyDefinition`, `defineAggregateProperty`,
+ * `setCardPropertyValue`, `setPropertyTransitionOnly`,
  * `cardPropertySnapshot` (read helper reused by the card commands'
- * version inserts), and — for sibling Card Management commands that
+ * version inserts), `recomputeAggregatesFor` / `recomputeAggregatesAround`
+ * / `aggregateHoldersOf` (for the tree and card commands to refresh
+ * holders after a membership, type, or existence change that no value
+ * write reports),
+ * and — for sibling Card Management commands that
  * set several properties in ONE card version (transitions.server.ts) —
  * `canonicalPropertyValue`, `samePropertyValue`, and
  * `appendPropertyValueChanges`. Those three keep this module the only
@@ -38,7 +55,7 @@
  * parameter — no module-level infrastructure imports; tests supply
  * their own real database.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import {
   cards,
@@ -55,8 +72,15 @@ import {
 import { projects } from "~/db/schema/projects";
 import { users } from "~/db/schema/identity";
 import { teamMemberships } from "~/db/schema/membership";
-import { PROPERTY_KINDS, type PropertyKind } from "~/shared/wire-types";
+import { AGGREGATE_TYPES, PROPERTY_KINDS, type AggregateType, type PropertyKind } from "~/shared/wire-types";
+import {
+  aggregateConditionErrors,
+  aggregateValuesFor,
+  treeAncestorCardIds,
+} from "~/domain/cards/aggregates.server";
 import { compileFormula } from "~/domain/cards/formula.server";
+import { parseProjectMql } from "~/domain/cards/mql-schema.server";
+import { loadTree, treeMembers } from "~/domain/trees/read.server";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import { scheduleHistoryNotification } from "~/domain/notifications.server";
@@ -224,6 +248,138 @@ function recomputeCardFormulas(
   }
 }
 
+/**
+ * Writes one derived value for a card: inserts, updates, or deletes the
+ * `card_property_values` row so it holds exactly `next` (null = no row).
+ *
+ * @returns true when a row changed
+ */
+function materializeDerivedValue(
+  db: BetterSQLite3Database,
+  cardId: number,
+  definitionId: number,
+  next: string | null,
+): boolean {
+  const currentRow = db
+    .select()
+    .from(cardPropertyValues)
+    .where(
+      and(
+        eq(cardPropertyValues.cardId, cardId),
+        eq(cardPropertyValues.propertyDefinitionId, definitionId),
+      ),
+    )
+    .get();
+  if (next === null) {
+    if (!currentRow) return false;
+    db.delete(cardPropertyValues).where(eq(cardPropertyValues.id, currentRow.id)).run();
+    return true;
+  }
+  if (currentRow) {
+    if (currentRow.value === next) return false;
+    db.update(cardPropertyValues)
+      .set({ value: next, updatedAt: new Date() })
+      .where(eq(cardPropertyValues.id, currentRow.id))
+      .run();
+    return true;
+  }
+  db.insert(cardPropertyValues).values({ cardId, propertyDefinitionId: definitionId, value: next }).run();
+  return true;
+}
+
+/**
+ * Recomputes and re-materializes every aggregate property value for
+ * the given holder cards, inside the caller's transaction. A holder
+ * that no longer qualifies for a definition (left the tree, changed
+ * type) has that value removed. Appends no card version (see header).
+ *
+ * @param tx - the transaction the surrounding command is using
+ * @param projectId - the cards' project
+ * @param cardIds - the holder cards to refresh; unknown ids are skipped
+ */
+export function recomputeAggregatesFor(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  cardIds: number[],
+): void {
+  const ids = [...new Set(cardIds)];
+  if (ids.length === 0) return;
+  for (const cardId of ids) {
+    const holder = tx
+      .select({ id: cards.id, number: cards.number, cardTypeId: cards.cardTypeId })
+      .from(cards)
+      .where(and(eq(cards.id, cardId), eq(cards.projectId, projectId)))
+      .get();
+    if (!holder) continue;
+    for (const [definitionId, value] of aggregateValuesFor(tx, projectId, holder)) {
+      materializeDerivedValue(tx, holder.id, definitionId, value);
+    }
+  }
+}
+
+/** The project's tree-relationship definition ids, empty when it has no aggregates to feed. */
+function relationshipDefinitionIds(db: BetterSQLite3Database, projectId: number): Set<number> {
+  const hasAggregates = db
+    .select({ id: propertyDefinitions.id })
+    .from(propertyDefinitions)
+    .where(and(eq(propertyDefinitions.projectId, projectId), eq(propertyDefinitions.kind, "aggregate")))
+    .get();
+  if (!hasAggregates) return new Set();
+  return new Set(
+    db
+      .select({ id: propertyDefinitions.id })
+      .from(propertyDefinitions)
+      .where(and(eq(propertyDefinitions.projectId, projectId), eq(propertyDefinitions.kind, "tree_relationship")))
+      .all()
+      .map((row) => row.id),
+  );
+}
+
+/**
+ * The ancestor cards a card's current relationship values name — the
+ * holders whose aggregates the card contributes to. Empty when the
+ * project has no aggregate definitions (nothing to feed).
+ *
+ * @param db - the Drizzle handle (or transaction)
+ * @param projectId - the card's project
+ * @param cardId - the card
+ * @returns ancestor card ids, unordered
+ */
+export function aggregateHoldersOf(
+  db: BetterSQLite3Database,
+  projectId: number,
+  cardId: number,
+): number[] {
+  const relationships = relationshipDefinitionIds(db, projectId);
+  if (relationships.size === 0) return [];
+  const numbers = db
+    .select({ value: cardPropertyValues.value })
+    .from(cardPropertyValues)
+    .where(
+      and(eq(cardPropertyValues.cardId, cardId), inArray(cardPropertyValues.propertyDefinitionId, [...relationships])),
+    )
+    .all()
+    .map((row) => Number(row.value));
+  return treeAncestorCardIds(db, projectId, numbers);
+}
+
+/**
+ * Refreshes the aggregates of a card AND of every ancestor its current
+ * relationship values name — the holders a change to the card itself
+ * (its type, its tree membership) can affect.
+ *
+ * @param tx - the transaction the surrounding command is using
+ * @param projectId - the card's project
+ * @param cardId - the card
+ */
+export function recomputeAggregatesAround(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  cardId: number,
+): void {
+  recomputeAggregatesFor(tx, projectId, [cardId, ...aggregateHoldersOf(tx, projectId, cardId)]);
+}
+
 export interface DefinePropertyDefinitionInput {
   projectId: number;
   name: string;
@@ -307,6 +463,8 @@ export function definePropertyDefinition(
   const kind = input.kind as PropertyKind;
   if (kind === "tree_relationship")
     return reject("kind", "is defined by configuring a card tree, not here");
+  if (kind === "aggregate")
+    return reject("kind", "is defined on a card tree's page, not here");
 
   const values = (input.values ?? []).map((value) => value.trim());
   if (kind !== "enumerated" && values.length > 0)
@@ -442,6 +600,11 @@ export function canonicalPropertyValue(
       return reject(
         "property",
         `${definition.name} is a tree relationship and is set by placing the card in its tree`,
+      );
+    case "aggregate":
+      return reject(
+        "property",
+        `${definition.name} is an aggregate property and cannot be set directly`,
       );
     case "text": {
       if (raw.length > VALUE_MAX_LENGTH)
@@ -616,10 +779,10 @@ export function setCardPropertyValue(
     )
     .get();
   if (!definition) return reject("property", "does not exist");
-  if (definition.kind === "formula")
+  if (definition.kind === "formula" || definition.kind === "aggregate")
     return reject(
       "property",
-      `${definition.name} is a formula property and cannot be set directly`,
+      `${definition.name} is ${definition.kind === "formula" ? "a formula" : "an aggregate"} property and cannot be set directly`,
     );
 
   const raw = input.value?.trim() || null;
@@ -738,10 +901,10 @@ export function setPropertyTransitionOnly(
     )
     .get();
   if (!definition) return reject("property", "does not exist");
-  if (definition.kind === "formula")
+  if (definition.kind === "formula" || definition.kind === "aggregate")
     return reject(
       "property",
-      `${definition.name} is a formula property and is never set directly`,
+      `${definition.name} is ${definition.kind === "formula" ? "a formula" : "an aggregate"} property and is never set directly`,
     );
   if (definition.transitionOnly === input.transitionOnly)
     return reject("property", "has no changes to save");
@@ -808,6 +971,17 @@ export function appendPropertyValueChanges(
     .from(cardPropertyValues)
     .where(eq(cardPropertyValues.cardId, card.id))
     .all();
+  // The holders this change can affect: the ancestors the card named
+  // before AND the ones it names after (a move touches both sides).
+  const relationships = relationshipDefinitionIds(tx, projectId);
+  const holderNumbers: number[] = [];
+  if (relationships.size > 0) {
+    const after = new Map(currentRows.map((row) => [row.propertyDefinitionId, row.value as string | null]));
+    for (const row of currentRows) if (relationships.has(row.propertyDefinitionId)) holderNumbers.push(Number(row.value));
+    for (const { definition, value } of changes) after.set(definition.id, value);
+    for (const [definitionId, value] of after)
+      if (relationships.has(definitionId) && value !== null) holderNumbers.push(Number(value));
+  }
   for (const { definition, value } of changes) {
     const currentRow = currentRows.find(
       (row) => row.propertyDefinitionId === definition.id,
@@ -860,5 +1034,188 @@ export function appendPropertyValueChanges(
     })
     .run();
   scheduleHistoryNotification(tx, projectId);
+  if (holderNumbers.length > 0) {
+    recomputeAggregatesFor(tx, projectId, treeAncestorCardIds(tx, projectId, holderNumbers));
+  }
   return row;
+}
+
+export interface DefineAggregatePropertyInput {
+  projectId: number;
+  name: string;
+  /** The tree the aggregate is computed over. */
+  treeId: number;
+  /** The card type whose cards carry the value — a non-leaf level of the tree. */
+  aggregateCardTypeId: number;
+  /** One of AGGREGATE_TYPES. */
+  aggregateType: string;
+  /** The numeric property aggregated; required unless the type is count. */
+  targetPropertyDefinitionId?: number | null;
+  /** Restrict to one descendant card type; null/absent means all descendants. */
+  scopeCardTypeId?: number | null;
+  /** Optional MQL condition (conditions only) a descendant must satisfy. */
+  condition?: string | null;
+  actorUserId: number;
+}
+
+/**
+ * DefineAggregateProperty — adds an aggregate property to a tree's
+ * card type (legacy `AggregatePropertyDefinition` creation).
+ *
+ * DOES: inserts a `property_definitions` row of kind `aggregate`
+ * (position appended at the end) carrying the tree, holder card type,
+ * function, target, scope and condition; computes and materializes the
+ * value into `card_property_values` for every member card of the tree
+ * whose type is the holder type (no version rows appended — introducing
+ * derived data is not a card edit, as for formulas); appends a
+ * PropertyDefinitionDefined event — all in one transaction.
+ * WHEN: the project exists, the actor is a project admin, the name is
+ * valid and unused, the tree belongs to the project, the holder type
+ * is a non-leaf level of it, the function is one of AGGREGATE_TYPES,
+ * the target (required unless count) is a number property or a
+ * number-valued formula, the scope (when given) is a type below the
+ * holder's level, and the condition (when given) parses as a plain
+ * condition using nothing viewer- or moment-bound.
+ * BECAUSE: an aggregate's every input is fixed at definition time so
+ * its value is one fact about the tree — rejecting a leaf holder, an
+ * aggregate target, or a CURRENT USER condition here is what lets the
+ * computation never fail later.
+ * REJECTS WHEN: unknown project or tree; actor below project admin;
+ * invalid or taken name; a holder type not on the tree ("is not on the
+ * tree") or the tree's leaf ("does not have any children"); an unknown
+ * function; no target for a non-count function ("Target property
+ * definition is required unless aggregate type is 'count'"); a target
+ * that is not numeric, is an aggregate, or is a date-valued formula; a
+ * scope type not below the holder's level ("must have a valid scope");
+ * a condition that fails to parse, is not a plain condition, uses
+ * TODAY / CURRENT USER / THIS CARD / FROM TREE, or reads an aggregate.
+ *
+ * @returns the created definition row, or field errors
+ */
+export function defineAggregateProperty(
+  db: BetterSQLite3Database,
+  input: DefineAggregatePropertyInput,
+): CommandResult<PropertyDefinitionRow> {
+  if (!projectExists(db, input.projectId))
+    return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.PROJECT_ADMIN,
+  );
+  if (denied) return denied;
+
+  const name = input.name.trim();
+  const nameError = propertyNameError(name);
+  if (nameError) return reject("name", nameError);
+  const taken = db
+    .select({ id: propertyDefinitions.id })
+    .from(propertyDefinitions)
+    .where(
+      and(
+        eq(propertyDefinitions.projectId, input.projectId),
+        sql`lower(${propertyDefinitions.name}) = ${name.toLowerCase()}`,
+      ),
+    )
+    .get();
+  if (taken) return reject("name", "has already been taken");
+
+  const shape = loadTree(db, input.projectId, input.treeId);
+  if (!shape) return reject("tree", "does not exist");
+  const holderLevel = shape.levels.find((l) => l.cardTypeId === input.aggregateCardTypeId);
+  if (!holderLevel) {
+    const typeName = db.select({ name: cardTypes.name }).from(cardTypes).where(eq(cardTypes.id, input.aggregateCardTypeId)).get()?.name;
+    return reject("aggregateCardType", `Aggregate properties cannot be defined since ${typeName ?? "that card type"} is not on the tree`);
+  }
+  if (!holderLevel.relationship)
+    return reject("aggregateCardType", `Aggregate properties cannot be defined since ${holderLevel.cardTypeName} does not have any children`);
+
+  if (!(AGGREGATE_TYPES as readonly string[]).includes(input.aggregateType))
+    return reject("aggregateType", "must be selected");
+  const aggregateType = input.aggregateType as AggregateType;
+
+  const targetId = input.targetPropertyDefinitionId ?? null;
+  const definitions = db
+    .select()
+    .from(propertyDefinitions)
+    .where(eq(propertyDefinitions.projectId, input.projectId))
+    .all();
+  if (aggregateType !== "count" && targetId === null)
+    return reject("target", "Target property definition is required unless aggregate type is 'count'");
+  if (targetId !== null) {
+    const target = definitions.find((d) => d.id === targetId);
+    if (!target) return reject("target", "does not exist");
+    if (target.kind === "aggregate")
+      return reject("target", `Aggregate properties cannot have another aggregate property (${target.name}) as a target`);
+    const numeric =
+      target.kind === "number" ||
+      (target.kind === "formula" &&
+        (() => {
+          const compiled = compileFormula(target.formula ?? "", definitions, target.nullIsZero);
+          return compiled.ok && compiled.formula.outputKind === "number";
+        })());
+    if (!numeric) return reject("target", "Aggregate property definition must be numeric");
+  }
+
+  const scopeId = input.scopeCardTypeId ?? null;
+  if (scopeId !== null) {
+    const scopeLevel = shape.levels.find((l) => l.cardTypeId === scopeId);
+    if (!scopeLevel || scopeLevel.position <= holderLevel.position)
+      return reject("scope", "Aggregate properties must have a valid scope");
+  }
+
+  const condition = input.condition?.trim() || null;
+  if (condition !== null) {
+    const parsed = parseProjectMql(db, input.projectId, condition);
+    if (!parsed.ok) return { ok: false, errors: { condition: parsed.errors.map((e) => `is not valid. ${e}`) } };
+    const errors = aggregateConditionErrors(parsed.query);
+    if (errors.length > 0) return { ok: false, errors: { condition: errors } };
+    if (!parsed.query.where) return reject("condition", "cannot be blank");
+  }
+
+  const last = db.get<{ highest: number }>(
+    sql`SELECT COALESCE(MAX(position), 0) AS highest FROM ${propertyDefinitions} WHERE ${propertyDefinitions.projectId} = ${input.projectId}`,
+  );
+  return db.transaction((tx) => {
+    const row = tx
+      .insert(propertyDefinitions)
+      .values({
+        projectId: input.projectId,
+        name,
+        kind: "aggregate",
+        position: (last?.highest ?? 0) + 1,
+        treeConfigurationId: shape.tree.id,
+        aggregateCardTypeId: holderLevel.cardTypeId,
+        aggregateType,
+        aggregateTargetId: aggregateType === "count" ? null : targetId,
+        aggregateScopeCardTypeId: scopeId,
+        aggregateCondition: condition,
+      })
+      .returning()
+      .get();
+    // Backfill every current holder so the property is readable at once
+    // (legacy update_cards: members of the tree of the holder type).
+    const holders = treeMembers(tx, shape.tree.id)
+      .filter((member) => member.cardTypeId === holderLevel.cardTypeId)
+      .map((member) => member.id);
+    recomputeAggregatesFor(tx, input.projectId, holders);
+    emitEvent(tx, {
+      type: "PropertyDefinitionDefined",
+      aggregateType: "Project",
+      aggregateId: input.projectId,
+      payload: {
+        name: row.name,
+        kind: "aggregate",
+        tree: shape.tree.name,
+        cardType: holderLevel.cardTypeName,
+        aggregateType,
+        target: targetId === null || aggregateType === "count" ? null : definitions.find((d) => d.id === targetId)?.name ?? null,
+        scope: scopeId === null ? null : shape.levels.find((l) => l.cardTypeId === scopeId)?.cardTypeName ?? null,
+        condition,
+      },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: row } as CommandResult<PropertyDefinitionRow>;
+  });
 }

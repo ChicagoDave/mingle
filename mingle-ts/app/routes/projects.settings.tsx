@@ -339,7 +339,7 @@ export default function ProjectSettings() {
                 <>: {property.formula}</>
               ) : null}
               {property.transitionOnly ? <> — transition only</> : null}
-              {property.kind === "formula" ? null : (
+              {property.kind === "formula" || property.kind === "aggregate" ? null : (
                 <Form method="post" style={{ display: "inline" }}>
                   <input type="hidden" name="intent" value="transitionOnly" />
                   <input

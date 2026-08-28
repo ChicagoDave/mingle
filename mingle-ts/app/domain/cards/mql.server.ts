@@ -748,7 +748,8 @@ function familyOf(ref: PropertyRef): ValueFamily {
     if (ref.key === "type") return "type";
     return ref.kind;
   }
-  return ref.kind;
+  // An aggregate's materialized value is always a number (Phase 24).
+  return ref.kind === "aggregate" ? "number" : ref.kind;
 }
 
 /** Human label for the kind, in legacy's "is a <type> property" phrasing. */

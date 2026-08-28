@@ -126,15 +126,17 @@ export const PROPERTY_KINDS = [
   "enumerated",
   "formula",
   "tree_relationship",
+  "aggregate",
 ] as const;
 
 /**
  * The kinds a project admin can define directly on the properties
  * page. `tree_relationship` (Phase 23) is created by configuring a
- * card tree, never from the define-property form.
+ * card tree and `aggregate` (Phase 24) is defined on a tree's page for
+ * one of its card types — neither comes from the define-property form.
  */
 export const DEFINABLE_PROPERTY_KINDS = PROPERTY_KINDS.filter(
-  (kind) => kind !== "tree_relationship",
+  (kind) => kind !== "tree_relationship" && kind !== "aggregate",
 );
 
 /** One of PROPERTY_KINDS. */
@@ -149,6 +151,28 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
   enumerated: "Managed text list",
   formula: "Formula",
   tree_relationship: "Any card used in tree",
+  aggregate: "Aggregate",
+};
+
+/**
+ * Aggregate functions an aggregate property can apply over a holder
+ * card's descendants (Phase 24; legacy AggregateType identifiers,
+ * lower-cased). `count` needs no target property; the others take a
+ * numeric one. Crosses the wire in the tree page's define-aggregate
+ * form and is stored in `property_definitions.aggregate_type`.
+ */
+export const AGGREGATE_TYPES = ["sum", "avg", "min", "max", "count"] as const;
+
+/** One of AGGREGATE_TYPES. */
+export type AggregateType = (typeof AGGREGATE_TYPES)[number];
+
+/** Human labels for the aggregate function selector (legacy display names). */
+export const AGGREGATE_TYPE_LABELS: Record<AggregateType, string> = {
+  sum: "Sum",
+  avg: "Average",
+  min: "Minimum",
+  max: "Maximum",
+  count: "Count",
 };
 
 /**

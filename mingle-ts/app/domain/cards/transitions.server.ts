@@ -421,10 +421,10 @@ export function defineTransition(
   for (const action of input.actions) {
     const definition = definitions.get(action.propertyDefinitionId);
     if (!definition) return reject("actions", "property does not exist");
-    if (definition.kind === "formula")
+    if (definition.kind === "formula" || definition.kind === "aggregate")
       return reject(
         "actions",
-        `${definition.name} is a formula property and cannot be set by a transition`,
+        `${definition.name} is a ${definition.kind} property and cannot be set by a transition`,
       );
     if (actionProperties.has(definition.id))
       return reject(
@@ -471,10 +471,10 @@ export function defineTransition(
         const definition = definitions.get(prerequisite.propertyDefinitionId);
         if (!definition)
           return reject("prerequisites", "property does not exist");
-        if (definition.kind === "formula")
+        if (definition.kind === "formula" || definition.kind === "aggregate")
           return reject(
             "prerequisites",
-            `${definition.name} is a formula property and cannot be required by a transition`,
+            `${definition.name} is a ${definition.kind} property and cannot be required by a transition`,
           );
         if (requiredProperties.has(definition.id))
           return reject(

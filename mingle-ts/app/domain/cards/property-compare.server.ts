@@ -41,6 +41,7 @@ export function comparisonKind(
 ): ComparisonKind {
   switch (definition.kind) {
     case "number":
+    case "aggregate":
       return "number";
     case "date":
       return "date";
