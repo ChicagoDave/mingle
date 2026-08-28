@@ -50,6 +50,7 @@ import { cardPropertySnapshot } from "~/domain/cards/properties.server";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
+import { scheduleHistoryNotification } from "~/domain/notifications.server";
 import {
   authorizeProjectAction,
   PrivilegeLevel,
@@ -256,6 +257,7 @@ export function createCard(
         modifiedByUserId: input.actorUserId,
       })
       .run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardCreated",
       aggregateType: "Card",
@@ -350,6 +352,7 @@ export function updateCard(
         modifiedByUserId: input.actorUserId,
       })
       .run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardUpdated",
       aggregateType: "Card",
@@ -427,6 +430,7 @@ export function deleteCard(
       .where(eq(cardPropertyValues.cardId, current.id))
       .run();
     tx.delete(cards).where(eq(cards.id, current.id)).run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardDeleted",
       aggregateType: "Card",

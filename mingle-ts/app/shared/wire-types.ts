@@ -279,3 +279,25 @@ export interface HealthzResponse {
   /** ISO-8601 timestamp the probe was answered at (server clock). */
   checkedAt: string;
 }
+
+/**
+ * History subscription kinds (Phase 22) — what a subscription watches.
+ * Posted by the subscribe forms and stored in `history_subscriptions.kind`.
+ * `project` is everything in the project (legacy's global subscription),
+ * `card` one card, `page` one wiki page, and `mql` the cards an MQL
+ * condition selects.
+ */
+export const SUBSCRIPTION_KINDS = ["project", "card", "page", "mql"] as const;
+
+/** One of SUBSCRIPTION_KINDS. */
+export type SubscriptionKind = (typeof SUBSCRIPTION_KINDS)[number];
+
+/** A subscription as the subscriptions page receives it from its loader. */
+export interface SubscriptionSummary {
+  id: number;
+  kind: SubscriptionKind;
+  /** Human wording of what is watched, e.g. "Card #12 Fix login". */
+  description: string;
+  /** Why delivery last failed for this subscription, when it did. */
+  lastError: string | null;
+}

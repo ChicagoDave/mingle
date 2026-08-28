@@ -525,6 +525,18 @@ export default function CardPage() {
         <button type="submit">Delete card</button>
       </Form>
 
+      <Form method="post" action={`/projects/${project.identifier}/subscriptions`}>
+        <input type="hidden" name="intent" value="subscribe" />
+        <input type="hidden" name="kind" value="card" />
+        <input type="hidden" name="card_number" value={card.number} />
+        <input
+          type="hidden"
+          name="returnTo"
+          value={`/projects/${project.identifier}/cards/${card.number}`}
+        />
+        <button type="submit">Subscribe via email</button>
+      </Form>
+
       <h2>Properties</h2>
       <ErrorLines field="property" errors={errors} />
       <ErrorLines field="value" errors={errors} />

@@ -7,7 +7,7 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "test:realpath": "vitest run test/healthz.real.test.ts",
+    "test:realpath": "vitest run test/healthz.real.test.ts test/notifications.real.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "test:mutation": "stryker run"
@@ -22,6 +22,7 @@
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.2",
     "isbot": "^5.1.36",
+    "nodemailer": "^9.0.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router": "^8"
@@ -36,6 +37,7 @@
     "@testing-library/user-event": "^14.6.6",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22",
+    "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.10",

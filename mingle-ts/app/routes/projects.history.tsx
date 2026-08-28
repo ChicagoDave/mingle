@@ -13,7 +13,7 @@
  * Owner context: Collaboration (HTTP adapter).
  */
 import { eq } from "drizzle-orm";
-import { Link, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.history";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -61,8 +61,15 @@ export default function ProjectHistory() {
         <Link to={`${base}/cards`}>Cards</Link> ·{" "}
         <Link to={`${base}/wiki`}>Pages</Link> ·{" "}
         <Link to={`${base}/murmurs`}>Murmurs</Link> ·{" "}
-        <a href={`${base}/feed.atom`}>Atom feed</a>
+        <a href={`${base}/feed.atom`}>Atom feed</a> ·{" "}
+        <Link to={`${base}/subscriptions`}>Subscriptions</Link>
       </p>
+      <Form method="post" action={`${base}/subscriptions`}>
+        <input type="hidden" name="intent" value="subscribe" />
+        <input type="hidden" name="kind" value="project" />
+        <input type="hidden" name="returnTo" value={`${base}/history`} />
+        <button type="submit">Subscribe via email</button>
+      </Form>
 
       {entries.length === 0 ? (
         <p className="info-box">Nothing has happened in {project.name} yet.</p>

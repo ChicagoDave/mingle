@@ -28,6 +28,10 @@ export default [
   route("projects/:identifier/murmurs", "routes/projects.murmurs.tsx"),
   route("projects/:identifier/history", "routes/projects.history.tsx"),
   route("projects/:identifier/feed.atom", "routes/projects.feed.atom.ts"),
+  route(
+    "projects/:identifier/subscriptions",
+    "routes/projects.subscriptions.tsx",
+  ),
   route("projects/:identifier/wiki", "routes/projects.wiki.tsx"),
   route("projects/:identifier/wiki/new", "routes/projects.wiki.new.tsx"),
   route("projects/:identifier/wiki/:pagename", "routes/projects.wiki.page.tsx"),

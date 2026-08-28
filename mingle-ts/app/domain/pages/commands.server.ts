@@ -42,6 +42,7 @@ import { pages, pageVersions, type PageRow } from "~/db/schema/pages";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
+import { scheduleHistoryNotification } from "~/domain/notifications.server";
 import {
   isBlankContent,
   sanitizePageContent,
@@ -166,6 +167,7 @@ export function createPage(
         modifiedByUserId: input.actorUserId,
       })
       .run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "PageCreated",
       aggregateType: "Page",
@@ -247,6 +249,7 @@ export function updatePage(
         modifiedByUserId: input.actorUserId,
       })
       .run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "PageUpdated",
       aggregateType: "Page",
@@ -314,6 +317,7 @@ export function deletePage(
       })
       .run();
     tx.delete(pages).where(eq(pages.id, current.id)).run();
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "PageDeleted",
       aggregateType: "Page",

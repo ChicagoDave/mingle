@@ -1,0 +1,39 @@
+# mingle-ts stack (ADR-0002: one container, one SQLite volume).
+#
+# Usage:
+#   docker compose up          # app on http://localhost:3000, data in the
+#                              # mingle-data volume (/data/mingle.db);
+#                              # mail lands in Mailpit at http://localhost:8025
+#
+# There is no database service — SQLite lives inside the app container on
+# a mounted volume. Backup = copy the volume's mingle.db file.
+#
+# Mailpit is the development mail server: history notifications (Phase 22)
+# are delivered to it over real SMTP, and its inbox is what the real-path
+# test reads. A production install points SMTP_HOST at its own relay and
+# drops this service.
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_FILE: /data/mingle.db
+      PORT: "3000"
+      SITE_URL: http://localhost:3000
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM: mingle@localhost
+    ports:
+      - "3000:3000"
+    volumes:
+      - mingle-data:/data
+    depends_on:
+      - mailpit
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web UI + HTTP API
+
+volumes:
+  mingle-data:

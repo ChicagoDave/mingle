@@ -190,6 +190,21 @@ export default function WikiPage() {
             Edit
           </Link>
         )}
+        <Form
+          method="post"
+          action={`${base}/subscriptions`}
+          style={{ display: "inline", marginLeft: 8 }}
+        >
+          <input type="hidden" name="intent" value="subscribe" />
+          <input type="hidden" name="kind" value="page" />
+          <input type="hidden" name="page_identifier" value={loaded.identifier} />
+          <input
+            type="hidden"
+            name="returnTo"
+            value={`${base}/wiki/${encodeURIComponent(loaded.identifier)}`}
+          />
+          <button type="submit">Subscribe via email</button>
+        </Form>
         {loaded.canDelete && (
           <Form method="post" style={{ display: "inline", marginLeft: 8 }}>
             <input type="hidden" name="intent" value="delete" />

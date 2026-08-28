@@ -22,7 +22,9 @@
  * is correct rather than correct-per-page.
  *
  * Public interface: `HistoryEntry`, `HistoryEntryKind`, `HISTORY_PAGE_SIZE`,
- * `projectHistory`, `projectHistoryCount`.
+ * `projectHistory`, `projectHistoryCount`, and for notification
+ * delivery (Phase 22) `HistoryCursor`, `historyCursor`,
+ * `historyEntriesAfter`.
  *
  * Owner context: Collaboration. Read-only — nothing here writes.
  */
@@ -59,6 +61,8 @@ export interface HistoryEntry {
    */
   id: string;
   kind: HistoryEntryKind;
+  /** The source row's own id within its trail — the cursor unit. */
+  sourceId: number;
   action: HistoryEntryAction;
   occurredAt: Date;
   authorUserId: number;
@@ -71,6 +75,8 @@ export interface HistoryEntry {
   href: string;
   /** The card's number, for card entries; null otherwise. */
   cardNumber: number | null;
+  /** The page's URL identifier (historical name), for page entries; null otherwise. */
+  pageIdentifier: string | null;
   /** The version this entry records, for card and page entries. */
   version: number | null;
   /** The comment or murmur text this entry carried, when it had one. */
@@ -176,7 +182,15 @@ export function projectHistory(
 ): HistoryEntry[] {
   const limit = options.limit ?? HISTORY_PAGE_SIZE;
   const page = Math.max(1, options.page ?? 1);
-  const rows = historyRows(db, project.id, limit, (page - 1) * limit);
+  return entriesFrom(db, historyRows(db, project.id, limit, (page - 1) * limit), project);
+}
+
+/** Resolves author names and shapes raw union rows into entries. */
+function entriesFrom(
+  db: BetterSQLite3Database,
+  rows: HistoryRow[],
+  project: { identifier: string; name: string },
+): HistoryEntry[] {
   if (rows.length === 0) return [];
 
   const authorIds = [...new Set(rows.map((row) => row.actor_user_id))];
@@ -194,6 +208,7 @@ export function projectHistory(
     return {
       id: `${row.kind}-${row.source_id}`,
       kind: row.kind,
+      sourceId: row.source_id,
       action,
       occurredAt: new Date(row.occurred_at),
       authorUserId: row.actor_user_id,
@@ -204,10 +219,81 @@ export function projectHistory(
       categories: [row.kind, action],
       href: hrefOf(row, project.identifier),
       cardNumber: row.number,
+      pageIdentifier: row.kind === "page" ? pageIdentifier(row.name ?? "") : null,
       version: row.version,
       text: row.text,
     };
   });
+}
+
+/**
+ * A position in each of the three trails: the highest source id
+ * already seen per kind. Zero means "from the beginning".
+ */
+export interface HistoryCursor {
+  cardVersionId: number;
+  pageVersionId: number;
+  murmurId: number;
+}
+
+/**
+ * The current end of each trail for the project — the cursor a new
+ * subscriber starts from, so history that predates the subscription
+ * is never delivered as if it had just happened.
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the project to read
+ */
+export function historyCursor(db: BetterSQLite3Database, projectId: number): HistoryCursor {
+  const row = db.get<{ card: number; page: number; murmur: number }>(sql`
+    SELECT
+      (SELECT coalesce(max(id), 0) FROM ${cardVersions} WHERE project_id = ${projectId}) AS card,
+      (SELECT coalesce(max(id), 0) FROM ${pageVersions} WHERE project_id = ${projectId}) AS page,
+      (SELECT coalesce(max(id), 0) FROM ${murmurs} WHERE project_id = ${projectId}) AS murmur`);
+  return {
+    cardVersionId: row?.card ?? 0,
+    pageVersionId: row?.page ?? 0,
+    murmurId: row?.murmur ?? 0,
+  };
+}
+
+/**
+ * Every entry written after a cursor, OLDEST first — the order a
+ * notifier delivers in. Same union, same tie-break as the feed, so a
+ * subscriber is told about exactly the entries the feed shows.
+ *
+ * @param db - the Drizzle handle
+ * @param project - the project's id, identifier (for links) and name
+ * @param cursor - the highest source id already seen, per trail
+ * @param limit - at most this many entries; defaults to 500
+ * @returns the fresh entries, oldest first
+ */
+export function historyEntriesAfter(
+  db: BetterSQLite3Database,
+  project: { id: number; identifier: string; name: string },
+  cursor: HistoryCursor,
+  limit = 500,
+): HistoryEntry[] {
+  const rows = db.all<HistoryRow>(sql`
+    SELECT 'card' AS kind, id AS source_id, created_at AS occurred_at,
+           modified_by_user_id AS actor_user_id, number AS number,
+           name AS name, version AS version, is_deletion AS is_deletion,
+           comment AS text
+      FROM ${cardVersions}
+     WHERE project_id = ${project.id} AND id > ${cursor.cardVersionId}
+    UNION ALL
+    SELECT 'page', id, created_at, modified_by_user_id, NULL,
+           name, version, is_deletion, NULL
+      FROM ${pageVersions}
+     WHERE project_id = ${project.id} AND id > ${cursor.pageVersionId}
+    UNION ALL
+    SELECT 'murmur', id, created_at, author_user_id, NULL,
+           NULL, NULL, 0, body
+      FROM ${murmurs}
+     WHERE project_id = ${project.id} AND id > ${cursor.murmurId}
+    ORDER BY occurred_at ASC, kind DESC, source_id ASC
+    LIMIT ${limit}`);
+  return entriesFrom(db, rows, project);
 }
 
 /**

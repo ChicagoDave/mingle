@@ -59,6 +59,7 @@ import { PROPERTY_KINDS, type PropertyKind } from "~/shared/wire-types";
 import { compileFormula } from "~/domain/cards/formula.server";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
+import { scheduleHistoryNotification } from "~/domain/notifications.server";
 import {
   authorizeProjectAction,
   PrivilegeLevel,
@@ -848,5 +849,6 @@ export function appendPropertyValueChanges(
       modifiedByUserId: actorUserId,
     })
     .run();
+  scheduleHistoryNotification(tx, projectId);
   return row;
 }

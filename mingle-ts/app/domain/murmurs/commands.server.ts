@@ -41,6 +41,7 @@ import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { cardPropertySnapshot } from "~/domain/cards/properties.server";
 import { emitEvent } from "~/domain/events.server";
+import { scheduleHistoryNotification } from "~/domain/notifications.server";
 import {
   authorizeProjectAction,
   PrivilegeLevel,
@@ -193,6 +194,7 @@ export function postMurmur(
       body,
       null,
     );
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "MurmurPosted",
       aggregateType: "Murmur",
@@ -330,6 +332,7 @@ export function addCardComment(
       body,
       card.id,
     );
+    scheduleHistoryNotification(tx, input.projectId);
     emitEvent(tx, {
       type: "CardCommentAdded",
       aggregateType: "Murmur",
