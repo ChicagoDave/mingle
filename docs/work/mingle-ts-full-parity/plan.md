@@ -270,7 +270,7 @@
 - **Entry state**: Phase 3 projects and Phase 4 team/permissions exist.
 - **Deliverable**: `programs`, `plans`, `objectives` schema; program membership (which projects belong to a program); objective CRUD with scheduling fields, matching `mingle-rails5/app/models/{program,plan,objective}.rb`.
 - **Exit state**: creating a program, adding two member projects, and defining an objective with a date range persists correctly and is queryable per-program, verified against real rows.
-- **Status**: CURRENT (since 2026-08-28)
+- **Status**: DONE (2026-08-28) — 39 behavioral tests passing (939/939 suite-wide), `tsc` clean; additive migration `0017_programs.sql` (programs, plans, program_projects, objectives, objective_versions, program_memberships). Program create (site admin; creator becomes program_admin; one plan per program with a today−1mo…+11mo window), settings, delete (cascades plan/projects/members, objectives keep deletion versions); add/remove member projects; program membership with legacy PROGRAM_ROLES on the shared privilege ladder (`authorizeProgramAction`); plan window move + auto-widen to fit objectives; objective create/update/delete with per-program never-reused numbers, name-derived identifiers regenerated on rename, dense per-status positions (new on top, deletion compacts), a version trail per change (ADR-0004). Identifier rules extracted to a shared kernel (`app/domain/identifiable.server.ts`) so Program Management does not import Card Management. Routes: `/programs`, `/programs/:identifier`, `/settings`, `/team`, `/objectives/:number`. Deferred: objective types + property definitions/mappings, BACKLOG status + reorder (Phase 27), `accepts_dependencies`/done-status mapping on program projects, a program-scoped history feed (objective versions do not join project history), HTML value statements (stored/rendered as plain text). Objective delete is program-admin (legacy left it unlisted; matches the codebase's delete-is-admin pattern).
 
 ### Phase 27: Backlog
 - **Tier**: Medium
@@ -279,7 +279,7 @@
 - **Entry state**: Phase 26 programs/objectives exist.
 - **Deliverable**: backlog schema and ordering, backed by `list_reordering_support.rb`'s legacy semantics (stable explicit ordering, not implicit created-at ordering).
 - **Exit state**: reordering backlog items persists the new order, verified by reloading and asserting the exact sequence.
-- **Status**: PENDING
+- **Status**: CURRENT (since 2026-08-28)
 
 ## Milestone 14: Import & Export
 

@@ -3,22 +3,31 @@
  *
  * Purpose: ports the legacy privilege ladder (UserAccess::PrivilegeLevel)
  * and answers "may this user perform an action requiring this level on
- * this project?". Established in Phase 4; every later phase's mutating
- * command reuses this checkpoint rather than re-inventing role checks
- * (plan, Phase 4 deliverable). The legacy LIGHT_READONLY level is
- * omitted — light users don't exist in this rewrite's schema.
+ * this project (or, since Phase 26, this program)?". Established in
+ * Phase 4; every later phase's mutating command reuses this checkpoint
+ * rather than re-inventing role checks (plan, Phase 4 deliverable).
+ * Programs sit on the same ladder: legacy gave program_admin the
+ * PROJECT_ADMIN rank and program_member the FULL_TEAM_MEMBER rank. The
+ * legacy LIGHT_READONLY level is omitted — light users don't exist in
+ * this rewrite's schema.
  *
  * Public interface: `PrivilegeLevel`, `rolePrivilegeLevel`,
  * `privilegeLevelFor`, `authorizeProjectAction`,
- * `authorizeSiteAdminAction`.
+ * `authorizeSiteAdminAction`, `programRolePrivilegeLevel`,
+ * `privilegeLevelForProgram`, `authorizeProgramAction`.
  *
  * Owner context: Identity & Access.
  */
 import { and, eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { users } from "~/db/schema/identity";
-import { teamMemberships } from "~/db/schema/membership";
-import { PROJECT_ROLE_LABELS, type ProjectRole } from "~/shared/wire-types";
+import { programMemberships, teamMemberships } from "~/db/schema/membership";
+import {
+  PROGRAM_ROLE_LABELS,
+  PROJECT_ROLE_LABELS,
+  type ProgramRole,
+  type ProjectRole,
+} from "~/shared/wire-types";
 import { type CommandResult, reject } from "~/domain/command.server";
 
 /**
@@ -145,5 +154,89 @@ export function authorizeProjectAction(
   return reject(
     "authorization",
     `requires ${requirementName(minimum)} access to this project`,
+  );
+}
+
+const PROGRAM_ROLE_LEVELS: Record<ProgramRole, PrivilegeRank> = {
+  program_admin: PrivilegeLevel.PROJECT_ADMIN,
+  program_member: PrivilegeLevel.FULL_TEAM_MEMBER,
+};
+
+/**
+ * Maps a stored program role to its privilege rank (legacy
+ * MembershipRole::PROGRAM_ROLES).
+ *
+ * @param role - a PROGRAM_ROLES id from a program_memberships row
+ */
+export function programRolePrivilegeLevel(role: ProgramRole): PrivilegeRank {
+  return PROGRAM_ROLE_LEVELS[role];
+}
+
+/**
+ * Computes a user's privilege rank for a program: MINGLE_ADMIN for site
+ * admins, the program role's rank for members, REGISTERED_USER for
+ * everyone else known, ANONYMOUS for an unknown user id.
+ *
+ * @param db - the Drizzle handle
+ * @param userId - the acting user
+ * @param programId - the program being acted on
+ */
+export function privilegeLevelForProgram(
+  db: BetterSQLite3Database,
+  userId: number,
+  programId: number,
+): PrivilegeRank {
+  const user = db
+    .select({ admin: users.admin })
+    .from(users)
+    .where(eq(users.id, userId))
+    .get();
+  if (!user) return PrivilegeLevel.ANONYMOUS;
+  if (user.admin) return PrivilegeLevel.MINGLE_ADMIN;
+  const membership = db
+    .select({ role: programMemberships.role })
+    .from(programMemberships)
+    .where(
+      and(
+        eq(programMemberships.programId, programId),
+        eq(programMemberships.userId, userId),
+      ),
+    )
+    .get();
+  if (!membership) return PrivilegeLevel.REGISTERED_USER;
+  return (
+    PROGRAM_ROLE_LEVELS[membership.role as ProgramRole] ?? PrivilegeLevel.REGISTERED_USER
+  );
+}
+
+/** Human name for the weakest program role that satisfies a required rank. */
+function programRequirementName(minimum: PrivilegeRank): string {
+  if (minimum >= PrivilegeLevel.MINGLE_ADMIN) return "Mingle administrator";
+  if (minimum >= PrivilegeLevel.PROJECT_ADMIN) return PROGRAM_ROLE_LABELS.program_admin;
+  return PROGRAM_ROLE_LABELS.program_member;
+}
+
+/**
+ * The program checkpoint: rejects unless the actor's privilege rank for
+ * the program meets the minimum. Same contract as
+ * `authorizeProjectAction` — a normal CommandResult keyed on
+ * "authorization" naming the unmet requirement.
+ *
+ * @param db - the Drizzle handle
+ * @param actorUserId - the acting user
+ * @param programId - the program being acted on
+ * @param minimum - the required privilege rank
+ * @returns a rejection, or null when authorized
+ */
+export function authorizeProgramAction(
+  db: BetterSQLite3Database,
+  actorUserId: number,
+  programId: number,
+  minimum: PrivilegeRank,
+): CommandResult<never> | null {
+  if (privilegeLevelForProgram(db, actorUserId, programId) >= minimum) return null;
+  return reject(
+    "authorization",
+    `requires ${programRequirementName(minimum)} access to this program`,
   );
 }

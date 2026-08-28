@@ -53,7 +53,7 @@ export default function Projects() {
         </ul>
       )}
       <p>
-        <Link to="/projects/new">Create a project</Link>
+        <Link to="/projects/new">Create a project</Link> · <Link to="/programs">Programs</Link>
       </p>
     </main>
   );

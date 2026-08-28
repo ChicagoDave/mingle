@@ -41,10 +41,13 @@ import {
   authorizeSiteAdminAction,
   PrivilegeLevel,
 } from "~/domain/identity/authorization.server";
+import {
+  generateIdentifier,
+  identifierRuleError as sharedIdentifierRuleError,
+} from "~/domain/identifiable.server";
 
-// Legacy parity rules (mingle/app/models/{project,identifiable}.rb):
-const IDENTIFIER_MAX_LENGTH = 30;
-const IDENTIFIER_FORMAT = /^[0-9a-z_]+$/;
+// Legacy parity rules (mingle/app/models/project.rb); the slug rules
+// shared with programs and objectives live in the identifier kernel.
 const INTERNAL_TABLE_PREFIX = /^mi_\d{6}/;
 
 /**
@@ -83,11 +86,8 @@ function findByIdentifier(
  * @returns an error message, or null when valid
  */
 function identifierRuleError(identifier: string): string | null {
-  if (identifier.length > IDENTIFIER_MAX_LENGTH)
-    return `is too long (maximum is ${IDENTIFIER_MAX_LENGTH} characters)`;
-  if (!IDENTIFIER_FORMAT.test(identifier))
-    return "may contain only lower case letters, numbers and underscore ('_')";
-  if (/^\d/.test(identifier)) return "may not start with a digit";
+  const shared = sharedIdentifierRuleError(identifier);
+  if (shared) return shared;
   if (INTERNAL_TABLE_PREFIX.test(identifier))
     return "reserved for internal Mingle use";
   return null;
@@ -107,17 +107,7 @@ export function generateProjectIdentifier(
   name: string,
   isTaken: (candidate: string) => boolean,
 ): string {
-  let candidate = name.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-  if (/^\d/.test(candidate)) candidate = `project_${candidate}`;
-  candidate = candidate.slice(0, IDENTIFIER_MAX_LENGTH).replace(/^_+|_+$/g, "");
-  if (!candidate) candidate = "proj";
-  let unique = candidate;
-  let n = 1;
-  while (isTaken(unique)) {
-    const suffix = String(++n);
-    unique = candidate.slice(0, IDENTIFIER_MAX_LENGTH - suffix.length) + suffix;
-  }
-  return unique;
+  return generateIdentifier(name, isTaken, { digitPrefix: "project_", fallback: "proj" });
 }
 
 /**

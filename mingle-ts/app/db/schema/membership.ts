@@ -1,21 +1,22 @@
 /**
- * Identity & Access schema — the `team_memberships`, `groups`, and
- * `group_memberships` tables.
+ * Identity & Access schema — the `team_memberships`, `groups`,
+ * `group_memberships` and `program_memberships` tables.
  *
  * Purpose: persistence shape for project team membership and roles
- * (Phase 4). Mirrors the legacy rules: one role per user per project
- * (legacy `member_roles.permission`), group names unique
- * case-insensitively within a project, non-blank, and comma-free, and
- * one membership row per user per group. Deviation from legacy noted:
+ * (Phase 4) and program membership and roles (Phase 26). Mirrors the
+ * legacy rules: one role per user per project or program (legacy
+ * `member_roles.permission`, which served both deliverable types),
+ * group names unique case-insensitively within a project, non-blank,
+ * and comma-free, and one membership row per user per group. Deviation from legacy noted:
  * the original modeled the team itself as an internal `Group`
  * (`groups.internal = true`); here team membership is its own table per
  * the plan, so `groups` holds user-defined groups only and needs no
  * `internal` flag.
  *
- * Public interface: `teamMemberships`, `groups`, `groupMemberships`
- * (Drizzle tables). Enforcement of the write rules lives in
- * app/domain/identity — never insert into these tables from route code
- * directly.
+ * Public interface: `teamMemberships`, `groups`, `groupMemberships`,
+ * `programMemberships` (Drizzle tables). Enforcement of the write rules
+ * lives in app/domain/identity — never insert into these tables from
+ * route code directly.
  *
  * Owner context: Identity & Access.
  */
@@ -107,3 +108,33 @@ export const groupMemberships = sqliteTable(
 );
 
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
+
+export const programMemberships = sqliteTable(
+  "program_memberships",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    programId: integer("program_id").notNull(),
+    userId: integer("user_id").notNull(),
+    /**
+     * The member's role: one of PROGRAM_ROLES in wire-types
+     * (program_admin | program_member), stored as the legacy
+     * `member_roles.permission` string. Validity enforced in the
+     * domain layer.
+     */
+    role: text("role").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [
+    // One role per user per program (legacy idx_unique_member_roles).
+    uniqueIndex("program_memberships_user_unique").on(t.programId, t.userId),
+    index("program_memberships_program_idx").on(t.programId),
+    index("program_memberships_user_idx").on(t.userId),
+  ],
+);
+
+export type ProgramMembershipRow = typeof programMemberships.$inferSelect;

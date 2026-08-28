@@ -359,3 +359,35 @@ export const DEPENDENCY_LIST_FILTERS = ["raising", "resolving"] as const;
 
 /** One of DEPENDENCY_LIST_FILTERS. */
 export type DependencyListFilter = (typeof DEPENDENCY_LIST_FILTERS)[number];
+
+/**
+ * Program team roles (legacy MembershipRole::PROGRAM_ROLES ids, stored
+ * in `program_memberships.role`; Phase 26). A program administrator
+ * ranks with a project administrator and a program member with a full
+ * team member on the one privilege ladder — legacy gave the two role
+ * sets the same PrivilegeLevel values.
+ */
+export const PROGRAM_ROLES = ["program_admin", "program_member"] as const;
+
+/** One of PROGRAM_ROLES. */
+export type ProgramRole = (typeof PROGRAM_ROLES)[number];
+
+/** Human labels for the program role selector (legacy MembershipRole names). */
+export const PROGRAM_ROLE_LABELS: Record<ProgramRole, string> = {
+  program_admin: "Program administrator",
+  program_member: "Program member",
+};
+
+/** The role a new program member gets when none is chosen. */
+export const DEFAULT_PROGRAM_ROLE: ProgramRole = "program_member";
+
+/**
+ * Objective statuses (legacy Objective::Status; Phase 26). PLANNED: on
+ * the plan timeline with a date range. BACKLOG: proposed, awaiting
+ * planning (arrives with Phase 27). Stored in `objectives.status`;
+ * validity enforced in the domain layer.
+ */
+export const OBJECTIVE_STATUSES = ["PLANNED", "BACKLOG"] as const;
+
+/** One of OBJECTIVE_STATUSES. */
+export type ObjectiveStatus = (typeof OBJECTIVE_STATUSES)[number];
