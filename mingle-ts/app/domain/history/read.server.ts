@@ -2,9 +2,12 @@
  * Collaboration read model — the project history feed (Phase 21).
  *
  * Purpose: one time-ordered stream of everything that happened in a
- * project, projected over the three trails that already record it —
- * `card_versions` (Phase 5), `page_versions` (Phase 16), and `murmurs`
- * (Phase 20). Legacy built the same stream from an `events` table whose
+ * project, projected over the four trails that already record it —
+ * `card_versions` (Phase 5), `page_versions` (Phase 16), `murmurs`
+ * (Phase 20), and `dependency_versions` (Phase 25 — read from either
+ * side, so a dependency's changes appear in the raising AND the
+ * resolving project's history, as legacy scoped its events to both).
+ * Legacy built the same stream from an `events` table whose
  * rows were generated from versions; this reads the versions directly,
  * which is the same information one dereference shorter.
  *
@@ -17,7 +20,7 @@
  * version trails carry the historical values (ADR-0004), so the feed
  * reads them and history stays fixed.
  *
- * Ordering is a query concern (ADR-0016): the three sources are unioned
+ * Ordering is a query concern (ADR-0016): the four sources are unioned
  * and ordered in SQL, never merged and sorted in JavaScript, so paging
  * is correct rather than correct-per-page.
  *
@@ -31,13 +34,14 @@
 import { inArray, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { cardVersions } from "~/db/schema/cards";
+import { dependencyVersions } from "~/db/schema/dependencies";
 import { users } from "~/db/schema/identity";
 import { murmurs } from "~/db/schema/murmurs";
 import { pageVersions } from "~/db/schema/pages";
 import { pageIdentifier } from "~/domain/pages/naming.server";
 
 /** Which trail an entry came from. */
-export type HistoryEntryKind = "card" | "page" | "murmur";
+export type HistoryEntryKind = "card" | "page" | "murmur" | "dependency";
 
 /**
  * What happened, in the vocabulary the feed presents. Derived from the
@@ -56,7 +60,7 @@ export type HistoryEntryAction =
 export interface HistoryEntry {
   /**
    * Stable across pages and across requests: the trail plus the source
-   * row's own id. Atom needs a durable entry id, and the three trails
+   * row's own id. Atom needs a durable entry id, and the four trails
    * have independent id spaces, so neither half alone would do.
    */
   id: string;
@@ -75,9 +79,11 @@ export interface HistoryEntry {
   href: string;
   /** The card's number, for card entries; null otherwise. */
   cardNumber: number | null;
+  /** The dependency's global number, for dependency entries; null otherwise. */
+  dependencyNumber: number | null;
   /** The page's URL identifier (historical name), for page entries; null otherwise. */
   pageIdentifier: string | null;
-  /** The version this entry records, for card and page entries. */
+  /** The version this entry records, for card, page and dependency entries. */
   version: number | null;
   /** The comment or murmur text this entry carried, when it had one. */
   text: string | null;
@@ -100,7 +106,7 @@ interface HistoryRow {
 }
 
 /**
- * The union of the three trails, newest first.
+ * The union of the four trails, newest first.
  *
  * Written as one compound SELECT so the ordering and the page window
  * are decided by SQL over the whole stream. Merging three separately
@@ -108,7 +114,7 @@ interface HistoryRow {
  * ordered and globally wrong — the second page would re-show rows the
  * first had already passed.
  *
- * The three trails have independent id spaces and no shared sequence,
+ * The four trails have independent id spaces and no shared sequence,
  * so two entries written in the SAME millisecond have no true relative
  * order to recover. `kind` then `source_id` breaks that tie: arbitrary,
  * but TOTAL and STABLE, which is what paging needs — an unstable tie
@@ -137,6 +143,11 @@ function historyRows(
     SELECT 'murmur', id, created_at, author_user_id, NULL,
            NULL, NULL, 0, body
       FROM ${murmurs} WHERE project_id = ${projectId}
+    UNION ALL
+    SELECT 'dependency', id, created_at, modified_by_user_id, number,
+           name, version, is_deletion, NULL
+      FROM ${dependencyVersions}
+     WHERE raising_project_id = ${projectId} OR resolving_project_id = ${projectId}
     ORDER BY occurred_at DESC, kind ASC, source_id DESC
     LIMIT ${limit} OFFSET ${offset}`);
 }
@@ -154,6 +165,7 @@ function actionOf(row: HistoryRow): HistoryEntryAction {
 function titleOf(row: HistoryRow, projectName: string): string {
   if (row.kind === "card") return `Card #${row.number} ${row.name}`;
   if (row.kind === "page") return `Page ${row.name}`;
+  if (row.kind === "dependency") return `Dependency D${row.number} ${row.name}`;
   return `Murmur in ${projectName}`;
 }
 
@@ -163,6 +175,7 @@ function hrefOf(row: HistoryRow, projectIdentifier: string): string {
   if (row.kind === "card") return `${base}/cards/${row.number}`;
   if (row.kind === "page")
     return `${base}/wiki/${encodeURIComponent(pageIdentifier(row.name ?? ""))}`;
+  if (row.kind === "dependency") return `${base}/dependencies/${row.number}`;
   return `${base}/murmurs`;
 }
 
@@ -218,7 +231,8 @@ function entriesFrom(
       title: titleOf(row, project.name),
       categories: [row.kind, action],
       href: hrefOf(row, project.identifier),
-      cardNumber: row.number,
+      cardNumber: row.kind === "card" ? row.number : null,
+      dependencyNumber: row.kind === "dependency" ? row.number : null,
       pageIdentifier: row.kind === "page" ? pageIdentifier(row.name ?? "") : null,
       version: row.version,
       text: row.text,
@@ -227,13 +241,14 @@ function entriesFrom(
 }
 
 /**
- * A position in each of the three trails: the highest source id
+ * A position in each of the four trails: the highest source id
  * already seen per kind. Zero means "from the beginning".
  */
 export interface HistoryCursor {
   cardVersionId: number;
   pageVersionId: number;
   murmurId: number;
+  dependencyVersionId: number;
 }
 
 /**
@@ -245,15 +260,18 @@ export interface HistoryCursor {
  * @param projectId - the project to read
  */
 export function historyCursor(db: BetterSQLite3Database, projectId: number): HistoryCursor {
-  const row = db.get<{ card: number; page: number; murmur: number }>(sql`
+  const row = db.get<{ card: number; page: number; murmur: number; dependency: number }>(sql`
     SELECT
       (SELECT coalesce(max(id), 0) FROM ${cardVersions} WHERE project_id = ${projectId}) AS card,
       (SELECT coalesce(max(id), 0) FROM ${pageVersions} WHERE project_id = ${projectId}) AS page,
-      (SELECT coalesce(max(id), 0) FROM ${murmurs} WHERE project_id = ${projectId}) AS murmur`);
+      (SELECT coalesce(max(id), 0) FROM ${murmurs} WHERE project_id = ${projectId}) AS murmur,
+      (SELECT coalesce(max(id), 0) FROM ${dependencyVersions}
+        WHERE raising_project_id = ${projectId} OR resolving_project_id = ${projectId}) AS dependency`);
   return {
     cardVersionId: row?.card ?? 0,
     pageVersionId: row?.page ?? 0,
     murmurId: row?.murmur ?? 0,
+    dependencyVersionId: row?.dependency ?? 0,
   };
 }
 
@@ -291,6 +309,12 @@ export function historyEntriesAfter(
            NULL, NULL, 0, body
       FROM ${murmurs}
      WHERE project_id = ${project.id} AND id > ${cursor.murmurId}
+    UNION ALL
+    SELECT 'dependency', id, created_at, modified_by_user_id, number,
+           name, version, is_deletion, NULL
+      FROM ${dependencyVersions}
+     WHERE (raising_project_id = ${project.id} OR resolving_project_id = ${project.id})
+       AND id > ${cursor.dependencyVersionId}
     ORDER BY occurred_at ASC, kind DESC, source_id ASC
     LIMIT ${limit}`);
   return entriesFrom(db, rows, project);
@@ -310,7 +334,9 @@ export function projectHistoryCount(
     SELECT
       (SELECT count(*) FROM ${cardVersions} WHERE project_id = ${projectId}) +
       (SELECT count(*) FROM ${pageVersions} WHERE project_id = ${projectId}) +
-      (SELECT count(*) FROM ${murmurs} WHERE project_id = ${projectId})
+      (SELECT count(*) FROM ${murmurs} WHERE project_id = ${projectId}) +
+      (SELECT count(*) FROM ${dependencyVersions}
+        WHERE raising_project_id = ${projectId} OR resolving_project_id = ${projectId})
       AS total`);
   return row?.total ?? 0;
 }

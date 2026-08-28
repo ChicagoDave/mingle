@@ -167,6 +167,7 @@ export function subscribe(
         lastCardVersionId: cursor.cardVersionId,
         lastPageVersionId: cursor.pageVersionId,
         lastMurmurId: cursor.murmurId,
+        lastDependencyVersionId: cursor.dependencyVersionId,
       })
       .returning()
       .get();

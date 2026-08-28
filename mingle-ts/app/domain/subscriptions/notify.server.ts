@@ -78,6 +78,7 @@ type ProjectRef = { id: number; identifier: string; name: string };
 function cursorFor(sub: HistorySubscriptionRow, kind: HistoryEntry["kind"]): number {
   if (kind === "card") return sub.lastCardVersionId;
   if (kind === "page") return sub.lastPageVersionId;
+  if (kind === "dependency") return sub.lastDependencyVersionId;
   return sub.lastMurmurId;
 }
 
@@ -98,6 +99,8 @@ function advanceCursors(
     set.lastPageVersionId = sql`max(${historySubscriptions.lastPageVersionId}, ${to.pageVersionId})`;
   if (to.murmurId !== undefined)
     set.lastMurmurId = sql`max(${historySubscriptions.lastMurmurId}, ${to.murmurId})`;
+  if (to.dependencyVersionId !== undefined)
+    set.lastDependencyVersionId = sql`max(${historySubscriptions.lastDependencyVersionId}, ${to.dependencyVersionId})`;
   if (Object.keys(set).length === 0) return;
   db.update(historySubscriptions)
     .set(set)
@@ -116,10 +119,11 @@ function setError(db: BetterSQLite3Database, subscriptionIds: number[], message:
 
 /** The highest source id per trail in a batch, for the final advance. */
 function batchMaxima(entries: HistoryEntry[]): HistoryCursor {
-  const max: HistoryCursor = { cardVersionId: 0, pageVersionId: 0, murmurId: 0 };
+  const max: HistoryCursor = { cardVersionId: 0, pageVersionId: 0, murmurId: 0, dependencyVersionId: 0 };
   for (const entry of entries) {
     if (entry.kind === "card") max.cardVersionId = Math.max(max.cardVersionId, entry.sourceId);
     else if (entry.kind === "page") max.pageVersionId = Math.max(max.pageVersionId, entry.sourceId);
+    else if (entry.kind === "dependency") max.dependencyVersionId = Math.max(max.dependencyVersionId, entry.sourceId);
     else max.murmurId = Math.max(max.murmurId, entry.sourceId);
   }
   return max;
@@ -234,6 +238,7 @@ async function deliverForProject(
     cardVersionId: Math.min(...subs.map((s) => s.lastCardVersionId)),
     pageVersionId: Math.min(...subs.map((s) => s.lastPageVersionId)),
     murmurId: Math.min(...subs.map((s) => s.lastMurmurId)),
+    dependencyVersionId: Math.min(...subs.map((s) => s.lastDependencyVersionId)),
   };
   const allFresh = historyEntriesAfter(db, project, floor);
   if (allFresh.length === 0) return;
@@ -288,6 +293,7 @@ async function deliverForProject(
         cardVersionId: entry.kind === "card" ? entry.sourceId : undefined,
         pageVersionId: entry.kind === "page" ? entry.sourceId : undefined,
         murmurId: entry.kind === "murmur" ? entry.sourceId : undefined,
+        dependencyVersionId: entry.kind === "dependency" ? entry.sourceId : undefined,
       });
       emitEvent(db, {
         type: "HistoryNotificationSent",

@@ -64,6 +64,7 @@ import {
   saveAttachmentFile,
 } from "~/files/attachment-storage.server";
 import { addCardComment } from "~/domain/murmurs/commands.server";
+import { cardDependencies } from "~/domain/dependencies/read.server";
 import { cardDiscussion } from "~/domain/murmurs/read.server";
 import { MurmurBody } from "~/components/murmur-body";
 import { requireUserId } from "~/auth/session.server";
@@ -206,6 +207,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     teamMembers,
     transitions: availableTransitions(db, project.id, card.number, userId),
     discussion: cardDiscussion(db, project.id, card.id),
+    // Phase 25: what this card asked of other projects, and what it resolves.
+    dependencies: cardDependencies(db, project.id, card.number),
   };
 }
 
@@ -409,6 +412,7 @@ export default function CardPage() {
     teamMembers,
     transitions,
     discussion,
+    dependencies,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
@@ -674,6 +678,35 @@ export default function CardPage() {
         <input type="file" name="file" />{" "}
         <button type="submit">Attach file</button>
       </Form>
+
+      <h2>Dependencies</h2>
+      {dependencies.raised.length === 0 && dependencies.resolving.length === 0 ? (
+        <p>
+          No dependencies.{" "}
+          <Link to={`/projects/${project.identifier}/dependencies`}>Raise one</Link>
+        </p>
+      ) : (
+        <ul id="card-dependencies">
+          {dependencies.raised.map((dep) => (
+            <li key={`raised-${dep.id}`}>
+              Raised{" "}
+              <Link to={`/projects/${project.identifier}/dependencies/${dep.number}`}>
+                {dep.prefixedNumber} {dep.name}
+              </Link>{" "}
+              on {dep.resolvingProject.name} — {dep.status}
+            </li>
+          ))}
+          {dependencies.resolving.map((dep) => (
+            <li key={`resolving-${dep.id}`}>
+              Resolves{" "}
+              <Link to={`/projects/${project.identifier}/dependencies/${dep.number}`}>
+                {dep.prefixedNumber} {dep.name}
+              </Link>{" "}
+              raised by {dep.raisingProject.name} — {dep.status}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h2>Discussion</h2>
       <ErrorLines field="body" errors={errors} />

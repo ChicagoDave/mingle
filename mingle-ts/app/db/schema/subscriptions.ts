@@ -8,7 +8,7 @@
  * a `kind` discriminator plus the one field that kind needs).
  *
  * Delivery position is stored per trail, as legacy stored
- * `last_max_card_version_id` / `last_max_page_version_id`: the three
+ * `last_max_card_version_id` / `last_max_page_version_id`: the four
  * history sources have independent id spaces (see
  * app/domain/history/read.server.ts), so a single cursor could not
  * say "everything after here" for all of them. Each cursor is the
@@ -50,6 +50,8 @@ export const historySubscriptions = sqliteTable(
     lastPageVersionId: integer("last_page_version_id").notNull().default(0),
     /** Highest `murmurs.id` already considered. */
     lastMurmurId: integer("last_murmur_id").notNull().default(0),
+    /** Highest `dependency_versions.id` already considered (Phase 25). */
+    lastDependencyVersionId: integer("last_dependency_version_id").notNull().default(0),
     /**
      * Why the last delivery could not evaluate this subscription (an
      * MQL filter that no longer parses, a subscriber with no address);

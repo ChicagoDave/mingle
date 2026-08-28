@@ -28,6 +28,11 @@ export default [
     "routes/projects.favorites.show.ts",
   ),
   route("projects/:identifier/murmurs", "routes/projects.murmurs.tsx"),
+  route("projects/:identifier/dependencies", "routes/projects.dependencies.tsx"),
+  route(
+    "projects/:identifier/dependencies/:number",
+    "routes/projects.dependencies.show.tsx",
+  ),
   route("projects/:identifier/history", "routes/projects.history.tsx"),
   route("projects/:identifier/feed.atom", "routes/projects.feed.atom.ts"),
   route(

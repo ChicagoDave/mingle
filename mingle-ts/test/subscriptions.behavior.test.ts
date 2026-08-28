@@ -48,6 +48,10 @@ const { cardMurmurLinks, murmurMentions, murmurs } = await import(
 const { domainEvents } = await import("../app/db/schema/events");
 const { jobs } = await import("../app/db/schema/jobs");
 const { historySubscriptions } = await import("../app/db/schema/subscriptions");
+const { dependencies, dependencyResolvingCards, dependencyVersions } = await import(
+  "../app/db/schema/dependencies"
+);
+const { linkResolvingCards, raiseDependency } = await import("../app/domain/dependencies/commands.server");
 const { registerUser } = await import("../app/domain/identity/commands.server");
 const { addTeamMember } = await import("../app/domain/identity/membership.server");
 const { createProject } = await import("../app/domain/projects/commands.server");
@@ -149,6 +153,9 @@ beforeEach(() => {
   db.delete(domainEvents).run();
   db.delete(jobs).run();
   db.delete(historySubscriptions).run();
+  db.delete(dependencyResolvingCards).run();
+  db.delete(dependencyVersions).run();
+  db.delete(dependencies).run();
   db.delete(cardMurmurLinks).run();
   db.delete(murmurMentions).run();
   db.delete(murmurs).run();
@@ -678,6 +685,42 @@ describe("delivery", () => {
     const working = capturingMailer();
     await deliverHistoryNotifications(db, working.mailer, { projectId });
     expect(working.sent.map((m) => m.subject)).toEqual([`Card #${second.number} Second created by BOSS`]);
+  });
+
+  it("a dependency's versions are delivered on the dependency trail, and a mid-batch refusal keeps the accepted one from being resent", async () => {
+    const sub = mustOk(subscribe(db, { projectId, filter: { kind: "project" }, actorUserId: devId }), "subscribe");
+    const raising = newCard("Needs help");
+    const resolving = newCard("Helper");
+    // Both projects are this one (legacy allowed it), so the whole trail is in scope.
+    const raised = mustOk(
+      raiseDependency(db, { raisingProjectId: projectId, raisingCardNumber: raising.number, name: "Need help", desiredEndDate: "2026-12-01", resolvingProjectId: projectId, actorUserId: adminId }),
+      "raise",
+    );
+    mustOk(linkResolvingCards(db, { projectId, dependencyNumber: raised.number, cardNumbers: [resolving.number], actorUserId: adminId }), "link");
+    const versionIds = db
+      .select({ id: dependencyVersions.id })
+      .from(dependencyVersions)
+      .where(eq(dependencyVersions.dependencyId, raised.id))
+      .all()
+      .map((v) => v.id)
+      .sort((a, b) => a - b);
+    expect(versionIds).toHaveLength(2);
+
+    // The two card creations are accepted; the dependency's first version is accepted; its second is refused.
+    const refusing = capturingMailer((message) => message.subject.startsWith("Dependency D1") && message.subject.includes("changed"));
+    await expect(deliverHistoryNotifications(db, refusing.mailer, { projectId })).rejects.toThrow("relay refused");
+    // Entries written in the same millisecond order by kind, so only the set is stable.
+    expect(refusing.sent.map((m) => m.subject).sort()).toEqual([
+      `Card #${raising.number} Needs help created by BOSS`,
+      `Card #${resolving.number} Helper created by BOSS`,
+      "Dependency D1 Need help created by BOSS",
+    ]);
+    expect(subscription(sub.id).lastDependencyVersionId).toBe(versionIds[0]);
+
+    const working = capturingMailer();
+    await deliverHistoryNotifications(db, working.mailer, { projectId });
+    expect(working.sent.map((m) => m.subject)).toEqual(["Dependency D1 Need help changed by BOSS"]);
+    expect(subscription(sub.id).lastDependencyVersionId).toBe(versionIds[1]);
   });
 
   it("a sweep with no project visits every project that has subscriptions", async () => {

@@ -336,3 +336,26 @@ export interface SubscriptionSummary {
   /** Why delivery last failed for this subscription, when it did. */
   lastError: string | null;
 }
+
+// ------------------------------------------------ dependencies (Phase 25)
+
+/**
+ * A dependency's lifecycle (legacy Dependency::NEW/ACCEPTED/RESOLVED).
+ * NEW: raised, no resolving card yet. ACCEPTED: the resolving project
+ * linked at least one card. RESOLVED: marked done. Stored in
+ * `dependencies.status`; validity enforced in the domain layer.
+ */
+export const DEPENDENCY_STATUSES = ["NEW", "ACCEPTED", "RESOLVED"] as const;
+
+/** One of DEPENDENCY_STATUSES. */
+export type DependencyStatus = (typeof DEPENDENCY_STATUSES)[number];
+
+/**
+ * Which side of a dependency a project list shows (legacy
+ * DependencyView `filter`): the ones this project raised, or the ones
+ * it is asked to resolve.
+ */
+export const DEPENDENCY_LIST_FILTERS = ["raising", "resolving"] as const;
+
+/** One of DEPENDENCY_LIST_FILTERS. */
+export type DependencyListFilter = (typeof DEPENDENCY_LIST_FILTERS)[number];
