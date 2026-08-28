@@ -116,6 +116,17 @@ function nextCardNumber(db: BetterSQLite3Database, projectId: number): number {
   return (row?.highest ?? 0) + 1;
 }
 
+/** Whether a number has ever been used in the project — by a live card or one now deleted. */
+function cardNumberUsed(db: BetterSQLite3Database, projectId: number, number: number): boolean {
+  const row = db.get<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM (
+      SELECT number FROM ${cards} WHERE ${cards.projectId} = ${projectId} AND number = ${number}
+      UNION ALL
+      SELECT number FROM ${cardVersions} WHERE ${cardVersions.projectId} = ${projectId} AND number = ${number}
+    )`);
+  return (row?.n ?? 0) > 0;
+}
+
 /** Shared name validation for create and update. */
 function cardNameError(name: string): string | null {
   if (!name) return "can't be blank";
@@ -198,18 +209,28 @@ export interface CreateCardInput {
   name: string;
   description?: string | null;
   cardTypeId: number;
+  /**
+   * An explicit card number (Phase 29 card import keeps the numbers
+   * in the file, as legacy did); absent means the project's next.
+   * Must be a positive integer not used by any card, live or deleted.
+   */
+  number?: number | null;
   actorUserId: number;
 }
 
 /**
  * CreateCard — creates a card as version 1 of its history.
  *
- * DOES: inserts a `cards` row (number = the project's next, version 1)
- * plus its version-1 `card_versions` snapshot, and appends a
- * CardCreated event, all in one transaction.
+ * DOES: inserts a `cards` row (number = the explicit number when given,
+ * else the project's next; version 1) plus its version-1
+ * `card_versions` snapshot, and appends a CardCreated event, all in
+ * one transaction. The number sequence continues past an explicit
+ * number (the next card takes one past the highest ever used).
  * REJECTS: unknown project, actor below full team member (legacy: card
  * create is FULL_TEAM_MEMBER — readonly members cannot), blank name,
- * name over 255 chars, or a card type not belonging to the project.
+ * name over 255 chars, a card type not belonging to the project, or an
+ * explicit number that is not a positive integer or is already used
+ * (live or deleted — numbers are never reused).
  *
  * @returns the created card row, or field errors
  */
@@ -233,9 +254,13 @@ export function createCard(
   if (nameError) return reject("name", nameError);
   const cardType = findCardType(db, input.projectId, input.cardTypeId);
   if (!cardType) return reject("cardType", "must be selected");
+  if (input.number !== undefined && input.number !== null) {
+    if (!Number.isInteger(input.number) || input.number <= 0) return reject("number", "must be a positive whole number");
+    if (cardNumberUsed(db, input.projectId, input.number)) return reject("number", "has already been taken");
+  }
 
   return db.transaction((tx) => {
-    const number = nextCardNumber(tx, input.projectId);
+    const number = input.number ?? nextCardNumber(tx, input.projectId);
     const row = tx
       .insert(cards)
       .values({

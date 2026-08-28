@@ -151,7 +151,7 @@ export default function ProjectDependencies() {
       </h1>
       <p>
         <Link to="/projects">All projects</Link> · <Link to={`${base}/cards`}>Cards</Link> ·{" "}
-        <Link to={`${base}/history`}>History</Link>
+        <Link to={`${base}/history`}>History</Link> · <Link to="/dependencies/import-export">Import / export</Link>
       </p>
       <p id="dependency-filter">
         {filter === "resolving" ? (

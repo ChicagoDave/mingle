@@ -498,6 +498,7 @@ export default function ProjectCards() {
           <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/dependencies`}>Dependencies</Link> ·{" "}
+          <Link to={`/projects/${project.identifier}/cards/import`}>Import cards</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/history`}>History</Link> ·{" "}
           <Link
             to={{

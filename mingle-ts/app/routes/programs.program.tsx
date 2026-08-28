@@ -109,7 +109,8 @@ export default function ProgramPage() {
       </h1>
       {program.description ? <p>{program.description}</p> : null}
       <p>
-        <Link to="/programs">All programs</Link> · <Link to={`${base}/team`}>Team</Link>
+        <Link to="/programs">All programs</Link> · <Link to={`${base}/backlog`}>Backlog</Link> ·{" "}
+        <Link to={`${base}/team`}>Team</Link>
         {canAdminister ? (
           <>
             {" "}

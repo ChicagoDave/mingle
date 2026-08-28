@@ -1,10 +1,12 @@
 /**
  * /programs/:identifier/objectives/:number — one objective: its
- * fields, an edit form, deletion, and its version trail (Phase 26).
+ * fields, an edit form, deletion, and its version trail (Phases 26–27).
  *
- * Purpose: the objective page. Members edit (`intent=update`); program
- * administrators delete (`intent=delete`), which returns to the
- * program page. The trail lists every version, newest first.
+ * Purpose: the objective page. Members edit (`intent=update` — the
+ * planned form with dates and row, or the backlog form without them,
+ * by the objective's status) and plan a backlog item (`intent=plan`);
+ * program administrators delete (`intent=delete`), which returns to
+ * the program page. The trail lists every version, newest first.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -15,6 +17,7 @@ import type { Route } from "./+types/programs.objectives.show";
 import { requireUserId } from "~/auth/session.server";
 import { db } from "~/db/client.server";
 import { PrivilegeLevel, privilegeLevelForProgram } from "~/domain/identity/authorization.server";
+import { planBacklogObjective, updateBacklogObjective } from "~/domain/programs/backlog.server";
 import { deleteObjective, TIMELINE_ROWS, updateObjective } from "~/domain/programs/objectives.server";
 import { findObjectiveByNumber, findProgramByIdentifier, objectiveHistory } from "~/domain/programs/read.server";
 
@@ -41,7 +44,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   };
 }
 
-/** Dispatches by `intent` to UpdateObjective or DeleteObjective. */
+/** Dispatches by `intent` to UpdateObjective / UpdateBacklogObjective (by status), PlanBacklogObjective or DeleteObjective. */
 export async function action({ request, params }: Route.ActionArgs) {
   const userId = await requireUserId(request);
   const program = findProgramByIdentifier(db, params.identifier);
@@ -52,20 +55,33 @@ export async function action({ request, params }: Route.ActionArgs) {
   const base = `/programs/${program.identifier}`;
 
   if (intent === "update") {
-    const result = updateObjective(db, {
+    const existing = findObjectiveByNumber(db, program.id, number);
+    if (!existing) throw new Response("Not Found", { status: 404 });
+    const common = {
       programId: program.id,
       number,
       name: String(form.get("name") ?? ""),
       valueStatement: String(form.get("value_statement") ?? ""),
-      startAt: String(form.get("start_at") ?? ""),
-      endAt: String(form.get("end_at") ?? ""),
-      verticalPosition: optionalInt(form.get("vertical_position")),
       size: optionalInt(form.get("size")),
       value: optionalInt(form.get("value")),
       actorUserId: userId,
-    });
+    };
+    const result =
+      existing.status === "BACKLOG"
+        ? updateBacklogObjective(db, common)
+        : updateObjective(db, {
+            ...common,
+            startAt: String(form.get("start_at") ?? ""),
+            endAt: String(form.get("end_at") ?? ""),
+            verticalPosition: optionalInt(form.get("vertical_position")),
+          });
     if (!result.ok) return data({ ok: false as const, errors: result.errors }, { status: 400 });
     throw redirect(`${base}/objectives/${number}`);
+  }
+  if (intent === "plan") {
+    const result = planBacklogObjective(db, { programId: program.id, number, actorUserId: userId });
+    if (!result.ok) return data({ ok: false as const, errors: result.errors }, { status: 400 });
+    throw redirect(base);
   }
   if (intent === "delete") {
     const result = deleteObjective(db, { programId: program.id, number, actorUserId: userId });
@@ -81,6 +97,7 @@ export default function ObjectivePage() {
   const actionData = useActionData<typeof action>();
   const errors = actionData && !actionData.ok ? Object.values(actionData.errors).flat() : [];
   const base = `/programs/${program.identifier}`;
+  const isBacklog = objective.status === "BACKLOG";
 
   return (
     <main id="objective" style={{ fontFamily: "sans-serif", padding: 16 }}>
@@ -91,8 +108,19 @@ export default function ObjectivePage() {
         Objective #{objective.number}: {objective.name} <small>({objective.identifier})</small>
       </h1>
       <p>
-        <strong>{objective.status}</strong> · {objective.startAt ?? "—"} → {objective.endAt ?? "—"} · row{" "}
-        {objective.verticalPosition} · size {objective.size} · value {objective.value} · version {objective.version}
+        <strong>{objective.status}</strong>
+        {isBacklog ? (
+          <>
+            {" "}
+            · backlog position {objective.position} (<Link to={`${base}/backlog`}>backlog</Link>)
+          </>
+        ) : (
+          <>
+            {" "}
+            · {objective.startAt ?? "—"} → {objective.endAt ?? "—"} · row {objective.verticalPosition}
+          </>
+        )}{" "}
+        · size {objective.size} · value {objective.value} · version {objective.version}
       </p>
       {objective.valueStatement ? (
         <section id="value-statement">
@@ -125,25 +153,31 @@ export default function ObjectivePage() {
                 <textarea name="value_statement" rows={4} cols={60} defaultValue={objective.valueStatement ?? ""} />
               </label>
             </p>
+            {!isBacklog && (
+              <p>
+                <label>
+                  Start <input name="start_at" type="date" defaultValue={objective.startAt ?? ""} required />
+                </label>{" "}
+                <label>
+                  End <input name="end_at" type="date" defaultValue={objective.endAt ?? ""} required />
+                </label>
+              </p>
+            )}
             <p>
-              <label>
-                Start <input name="start_at" type="date" defaultValue={objective.startAt ?? ""} required />
-              </label>{" "}
-              <label>
-                End <input name="end_at" type="date" defaultValue={objective.endAt ?? ""} required />
-              </label>
-            </p>
-            <p>
-              <label>
-                Timeline row{" "}
-                <input
-                  name="vertical_position"
-                  type="number"
-                  min={1}
-                  max={TIMELINE_ROWS}
-                  defaultValue={objective.verticalPosition}
-                />
-              </label>{" "}
+              {!isBacklog && (
+                <>
+                  <label>
+                    Timeline row{" "}
+                    <input
+                      name="vertical_position"
+                      type="number"
+                      min={1}
+                      max={TIMELINE_ROWS}
+                      defaultValue={objective.verticalPosition}
+                    />
+                  </label>{" "}
+                </>
+              )}
               <label>
                 Size <input name="size" type="number" min={0} defaultValue={objective.size} />
               </label>{" "}
@@ -153,6 +187,12 @@ export default function ObjectivePage() {
             </p>
             <button type="submit">Save objective</button>
           </Form>
+          {isBacklog && (
+            <Form method="post">
+              <input type="hidden" name="intent" value="plan" />
+              <button type="submit">Plan this objective</button>
+            </Form>
+          )}
         </section>
       )}
 

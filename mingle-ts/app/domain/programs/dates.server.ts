@@ -6,10 +6,12 @@
  * (legacy `date` columns), stored as ISO `YYYY-MM-DD` text. This module
  * keeps that representation in one place: what counts as a valid date,
  * how "a month before/after" is computed (legacy ActiveSupport month
- * arithmetic clamps the day to the target month's length), and what
- * "today" is for defaults.
+ * arithmetic clamps the day to the target month's length), the month
+ * bounds a backlog objective is planned into, and what "today" is for
+ * defaults.
  *
- * Public interface: `isoDateError`, `todayIso`, `addMonths`.
+ * Public interface: `isoDateError`, `todayIso`, `addMonths`, `addDays`,
+ * `startOfMonth`, `endOfMonth`.
  *
  * Owner context: Program Management (pure; no infrastructure imports).
  */
@@ -53,4 +55,27 @@ export function addMonths(iso: string, months: number): string {
   const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
   target.setUTCDate(Math.min(day, lastDay));
   return target.toISOString().slice(0, 10);
+}
+
+/**
+ * Adds (or subtracts) whole days to an ISO date.
+ *
+ * @param iso - a valid ISO date
+ * @param days - positive or negative day count
+ */
+export function addDays(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** The first day of the month containing `iso` (legacy `beginning_of_month`). */
+export function startOfMonth(iso: string): string {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+/** The last day of the month containing `iso` (legacy `end_of_month`). */
+export function endOfMonth(iso: string): string {
+  const [year, month] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
 }

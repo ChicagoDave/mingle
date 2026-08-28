@@ -382,10 +382,10 @@ export const PROGRAM_ROLE_LABELS: Record<ProgramRole, string> = {
 export const DEFAULT_PROGRAM_ROLE: ProgramRole = "program_member";
 
 /**
- * Objective statuses (legacy Objective::Status; Phase 26). PLANNED: on
- * the plan timeline with a date range. BACKLOG: proposed, awaiting
- * planning (arrives with Phase 27). Stored in `objectives.status`;
- * validity enforced in the domain layer.
+ * Objective statuses (legacy Objective::Status; Phases 26–27). PLANNED:
+ * on the plan timeline with a date range. BACKLOG: proposed, awaiting
+ * planning, with no dates and an explicit backlog position. Stored in
+ * `objectives.status`; validity enforced in the domain layer.
  */
 export const OBJECTIVE_STATUSES = ["PLANNED", "BACKLOG"] as const;
 

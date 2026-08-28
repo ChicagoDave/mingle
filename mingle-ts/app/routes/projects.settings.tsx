@@ -214,7 +214,10 @@ export default function ProjectSettings() {
         <Link to={`/projects/${project.identifier}/trees`}>Trees</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/cards`}>Cards</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link>
+        <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link> ·{" "}
+        <a href={`/projects/${project.identifier}/export`} download>
+          Export as template
+        </a>
       </p>
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
 

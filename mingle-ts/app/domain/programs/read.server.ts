@@ -1,15 +1,16 @@
 /**
- * Program Management read model (Phase 26).
+ * Program Management read model (Phases 26–27).
  *
  * Purpose: the query side of programs for routes — the program list,
  * a program's overview (plan window, member projects, objectives in
- * timeline order), one objective with its version trail, the program's
- * members, and the projects that could still be added. Pure reads over
+ * timeline order), the backlog in its explicit order, one objective
+ * with its version trail, the program's members, and the projects that
+ * could still be added. Pure reads over
  * the Program Management and Identity tables; nothing here writes.
  *
  * Public interface: `listPrograms`, `findProgramByIdentifier`,
- * `programOverview`, `findObjectiveByNumber`, `objectiveHistory`,
- * `programMembers`, `addableProjects`.
+ * `programOverview`, `backlogObjectives`, `findObjectiveByNumber`,
+ * `objectiveHistory`, `programMembers`, `addableProjects`.
  *
  * Owner context: Program Management.
  */
@@ -148,6 +149,37 @@ export function programOverview(db: BetterSQLite3Database, programId: number): P
     .orderBy(desc(objectives.status), asc(objectives.position))
     .all();
   return { plan, projects: memberProjects, objectives: rows };
+}
+
+/** A backlog item as the backlog page lists it, in backlog order. */
+export interface BacklogObjectiveSummary {
+  id: number;
+  number: number;
+  name: string;
+  identifier: string;
+  valueStatement: string | null;
+  position: number;
+  size: number;
+  value: number;
+}
+
+/** The program's BACKLOG objectives in their explicit position order (legacy `Objective.backlog`). */
+export function backlogObjectives(db: BetterSQLite3Database, programId: number): BacklogObjectiveSummary[] {
+  return db
+    .select({
+      id: objectives.id,
+      number: objectives.number,
+      name: objectives.name,
+      identifier: objectives.identifier,
+      valueStatement: objectives.valueStatement,
+      position: objectives.position,
+      size: objectives.size,
+      value: objectives.value,
+    })
+    .from(objectives)
+    .where(and(eq(objectives.programId, programId), eq(objectives.status, "BACKLOG")))
+    .orderBy(asc(objectives.position))
+    .all();
 }
 
 /** The objective with this number in the program, if it still exists. */

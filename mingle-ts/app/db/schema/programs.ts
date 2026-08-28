@@ -1,7 +1,9 @@
 /**
  * Program Management schema — the `programs`, `plans`,
  * `program_projects`, `objectives` and `objective_versions` tables
- * (Phase 26).
+ * (Phase 26; the backlog of Phase 27 is the same `objectives` table
+ * with status BACKLOG and no dates, as legacy migration
+ * `merge_backlog_objective_to_objective_table` left it).
  *
  * Purpose: persistence shape for the Program aggregate (legacy
  * `Program`, a `Deliverable` like a project) and what hangs off it: its
@@ -124,7 +126,7 @@ export const objectives = sqliteTable(
     value: integer("value").notNull().default(0),
     /** See OBJECTIVE_STATUSES in app/shared/wire-types.ts. */
     status: text("status").notNull().default("PLANNED"),
-    /** 1-based, dense within the program's objectives of the same status; a new objective takes 1. */
+    /** 1-based, dense within the program's objectives of the same status; a new objective takes 1. For BACKLOG this is the explicit, reorderable backlog order. */
     position: integer("position").notNull(),
     /** Current version number; the matching objective_versions row is the latest. */
     version: integer("version").notNull(),
