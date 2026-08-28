@@ -41,8 +41,20 @@ export const propertyDefinitions = sqliteTable(
     projectId: integer("project_id").notNull(),
     /** Display name; unique case-insensitively within the project. */
     name: text("name").notNull(),
-    /** One of PROPERTY_KINDS (wire-types): text|number|date|user|enumerated|formula. */
+    /**
+     * One of PROPERTY_KINDS (wire-types): text|number|date|user|
+     * enumerated|formula|tree_relationship. The last is created only by
+     * configuring a card tree (Phase 23): its value is the NUMBER of
+     * the ancestor card of `valid_card_type_id` this card sits under.
+     */
     kind: text("kind").notNull(),
+    /** tree_relationship kind only: the tree this relationship belongs to. */
+    treeConfigurationId: integer("tree_configuration_id"),
+    /**
+     * tree_relationship kind only: the card type a value must be — the
+     * property "Release" on a Story holds a Release card's number.
+     */
+    validCardTypeId: integer("valid_card_type_id"),
     /**
      * The formula expression text — formula kind only, null otherwise.
      * Validated (parse + type-check) at definition time; references

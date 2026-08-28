@@ -741,7 +741,7 @@ function normalizeName(name: string): string {
 }
 
 /** Which comparison family a property's values belong to. */
-type ValueFamily = "number" | "date" | "user" | "text" | "enumerated" | "type" | "formula";
+type ValueFamily = "number" | "date" | "user" | "text" | "enumerated" | "type" | "formula" | "tree_relationship";
 
 function familyOf(ref: PropertyRef): ValueFamily {
   if (ref.source === "predefined") {
@@ -1046,6 +1046,15 @@ class Resolver {
           this.error(`${left.name} is a formula property, and value ${text} is neither number nor date.`);
         }
         return text;
+      case "tree_relationship": {
+        // The stored value is the ancestor card's number, so a relationship
+        // compares against a bare card number (legacy compared the same way).
+        if (!/^\d+$/.test(text)) {
+          this.error(`${left.name} is a tree relationship property, and value ${text} is not a card number.`);
+          return text;
+        }
+        return text;
+      }
       case "user": {
         const id = this.usersByLogin.get(lower);
         if (id === undefined) {

@@ -125,7 +125,17 @@ export const PROPERTY_KINDS = [
   "user",
   "enumerated",
   "formula",
+  "tree_relationship",
 ] as const;
+
+/**
+ * The kinds a project admin can define directly on the properties
+ * page. `tree_relationship` (Phase 23) is created by configuring a
+ * card tree, never from the define-property form.
+ */
+export const DEFINABLE_PROPERTY_KINDS = PROPERTY_KINDS.filter(
+  (kind) => kind !== "tree_relationship",
+);
 
 /** One of PROPERTY_KINDS. */
 export type PropertyKind = (typeof PROPERTY_KINDS)[number];
@@ -138,6 +148,7 @@ export const PROPERTY_KIND_LABELS: Record<PropertyKind, string> = {
   user: "Automatically generated from the team list",
   enumerated: "Managed text list",
   formula: "Formula",
+  tree_relationship: "Any card used in tree",
 };
 
 /**

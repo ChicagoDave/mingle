@@ -493,6 +493,7 @@ export default function ProjectCards() {
           <Link to="/projects">All projects</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
+          <Link to={`/projects/${project.identifier}/trees`}>Trees</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/team`}>Team</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
           <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link> ·{" "}

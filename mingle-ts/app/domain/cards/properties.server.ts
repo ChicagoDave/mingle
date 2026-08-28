@@ -150,7 +150,7 @@ export function cardPropertySnapshot(
  *
  * @returns an error message, or null when valid
  */
-function propertyNameError(name: string): string | null {
+export function propertyNameError(name: string): string | null {
   if (!name) return "can't be blank";
   if (name.length > NAME_MAX_LENGTH)
     return `is too long (maximum is ${NAME_MAX_LENGTH} characters)`;
@@ -305,6 +305,8 @@ export function definePropertyDefinition(
   if (!(PROPERTY_KINDS as readonly string[]).includes(input.kind))
     return reject("kind", "must be selected");
   const kind = input.kind as PropertyKind;
+  if (kind === "tree_relationship")
+    return reject("kind", "is defined by configuring a card tree, not here");
 
   const values = (input.values ?? []).map((value) => value.trim());
   if (kind !== "enumerated" && values.length > 0)
@@ -432,6 +434,14 @@ export function canonicalPropertyValue(
       return reject(
         "property",
         `${definition.name} is a formula property and cannot be set directly`,
+      );
+    case "tree_relationship":
+      // Placement in a tree is a structural change (ancestors inherited,
+      // descendants revised); it goes through app/domain/trees, never
+      // through a bare value write.
+      return reject(
+        "property",
+        `${definition.name} is a tree relationship and is set by placing the card in its tree`,
       );
     case "text": {
       if (raw.length > VALUE_MAX_LENGTH)

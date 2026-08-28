@@ -20,7 +20,7 @@ import type { Route } from "./+types/projects.settings";
 import {
   PROJECT_VARIABLE_DATA_TYPES,
   PROJECT_VARIABLE_DATA_TYPE_LABELS,
-  PROPERTY_KINDS,
+  DEFINABLE_PROPERTY_KINDS,
   PROPERTY_KIND_LABELS,
   type FieldErrors,
   type PropertyKind,
@@ -211,6 +211,7 @@ export default function ProjectSettings() {
         <Link to={`/projects/${project.identifier}/team`}>Team</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/groups`}>Groups</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/trees`}>Trees</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/cards`}>Cards</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link>
@@ -375,7 +376,7 @@ export default function ProjectSettings() {
             Kind
             <br />
             <select name="kind" defaultValue="text">
-              {PROPERTY_KINDS.map((kind) => (
+              {DEFINABLE_PROPERTY_KINDS.map((kind) => (
                 <option key={kind} value={kind}>
                   {PROPERTY_KIND_LABELS[kind]}
                 </option>

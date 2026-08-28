@@ -549,6 +549,20 @@ export default function CardPage() {
               {property.name}: {property.value ?? "(not set)"}{" "}
               <small>(formula)</small>
             </p>
+          ) : property.kind === "tree_relationship" ? (
+            // Placement is structural (ancestors inherited, descendants
+            // revised), so it is changed on the tree page, not here.
+            <p key={property.id} className="tree-relationship">
+              {property.name}:{" "}
+              {property.value === null ? (
+                "(not set)"
+              ) : (
+                <Link to={`/projects/${project.identifier}/cards/${property.value}`}>#{property.value}</Link>
+              )}{" "}
+              <small>
+                (tree relationship — <Link to={`/projects/${project.identifier}/trees`}>trees</Link>)
+              </small>
+            </p>
           ) : (
           <Form method="post" key={property.id}>
             <input type="hidden" name="intent" value="set-property" />

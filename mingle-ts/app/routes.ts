@@ -21,6 +21,8 @@ export default [
   route("projects/:identifier/groups", "routes/projects.groups.tsx"),
   route("projects/:identifier/transitions", "routes/projects.transitions.tsx"),
   route("projects/:identifier/favorites", "routes/projects.favorites.tsx"),
+  route("projects/:identifier/trees", "routes/projects.trees.tsx"),
+  route("projects/:identifier/trees/:treeId", "routes/projects.trees.tree.tsx"),
   route(
     "projects/:identifier/favorites/:favoriteId",
     "routes/projects.favorites.show.ts",
