@@ -53,6 +53,8 @@ export default function WikiPages() {
         <Link to="/projects">All projects</Link> ·{" "}
         <Link to={`${base}/cards`}>Cards</Link> ·{" "}
         <Link to={`${base}/settings`}>Settings</Link> ·{" "}
+        <Link to={`${base}/murmurs`}>Murmurs</Link> ·{" "}
+        <Link to={`${base}/history`}>History</Link> ·{" "}
         <Link to={`${base}/team`}>Team</Link>
       </p>
 

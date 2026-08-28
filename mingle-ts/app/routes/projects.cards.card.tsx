@@ -63,6 +63,9 @@ import {
   sanitizeFileName,
   saveAttachmentFile,
 } from "~/files/attachment-storage.server";
+import { addCardComment } from "~/domain/murmurs/commands.server";
+import { cardDiscussion } from "~/domain/murmurs/read.server";
+import { MurmurBody } from "~/components/murmur-body";
 import { requireUserId } from "~/auth/session.server";
 
 /** Loads the card, its project's card types, and its version trail (newest first). */
@@ -94,6 +97,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       name: cardVersions.name,
       cardTypeName: cardVersions.cardTypeName,
       propertyValues: cardVersions.propertyValues,
+      comment: cardVersions.comment,
       modifiedBy: users.name,
       createdAt: cardVersions.createdAt,
     })
@@ -201,6 +205,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     properties,
     teamMembers,
     transitions: availableTransitions(db, project.id, card.number, userId),
+    discussion: cardDiscussion(db, project.id, card.id),
   };
 }
 
@@ -378,6 +383,16 @@ export async function action({ request, params }: Route.ActionArgs) {
       ? { saved: true as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "comment") {
+    const result = addCardComment(db, {
+      projectId: project.id,
+      cardNumber,
+      body: String(form.get("body") ?? ""),
+      actorUserId,
+    });
+    if (!result.ok) return { errors: result.errors satisfies FieldErrors };
+    return { saved: true as const };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
@@ -393,6 +408,7 @@ export default function CardPage() {
     properties,
     teamMembers,
     transitions,
+    discussion,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
@@ -633,6 +649,36 @@ export default function CardPage() {
         <button type="submit">Attach file</button>
       </Form>
 
+      <h2>Discussion</h2>
+      <ErrorLines field="body" errors={errors} />
+      {discussion.length === 0 ? (
+        <p>No murmurs about this card.</p>
+      ) : (
+        <ul id="card-discussion">
+          {discussion.map((murmur) => (
+            <li key={murmur.id} id={`murmur-${murmur.id}`}>
+              <strong>{murmur.authorName}</strong>{" "}
+              <MurmurBody
+                segments={murmur.body}
+                projectIdentifier={project.identifier}
+              />
+              {murmur.originCardNumber === null && (
+                <>
+                  {" "}
+                  <small>(mentioned this card)</small>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <Form method="post">
+        <input type="hidden" name="intent" value="comment" />
+        <textarea name="body" rows={3} cols={60} placeholder="Add a comment" />
+        <br />
+        <button type="submit">Add comment</button>
+      </Form>
+
       <h2>History</h2>
       <ul>
         {versions.map((v) => (
@@ -640,6 +686,7 @@ export default function CardPage() {
             v{v.version} — {v.name} ({v.cardTypeName}) by {v.modifiedBy} at{" "}
             {new Date(v.createdAt).toISOString()}
             {v.propertySummary ? <> — {v.propertySummary}</> : null}
+            {v.comment ? <> — commented: {v.comment}</> : null}
           </li>
         ))}
       </ul>

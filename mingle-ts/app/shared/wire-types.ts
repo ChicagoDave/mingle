@@ -18,6 +18,22 @@
  */
 
 /**
+ * One piece of a murmur body prepared for display (Phase 20).
+ *
+ * A murmur is stored as plain text; the server splits it into these
+ * segments — resolving which `@` tokens actually named a team member
+ * and which `#123` references name a real card — and the browser
+ * renders each segment, escaping the text ones. The shape crosses the
+ * wire in every murmur loader payload, so both sides import it here
+ * rather than the Collaboration read model, which is `.server`-only
+ * (rule 8b).
+ */
+export type MurmurSegment =
+  | { kind: "text"; text: string }
+  | { kind: "card"; number: number }
+  | { kind: "mention"; token: string };
+
+/**
  * Field-keyed validation errors returned by form actions (register,
  * login, profile, password change). Keys are input field names; values
  * are human-readable messages in legacy Mingle's phrasing.

@@ -118,6 +118,14 @@ export const cardVersions = sqliteTable(
      * (mirroring its emptied description).
      */
     propertyValues: text("property_values").notNull().default("{}"),
+    /**
+     * The comment posted with this version, or NULL when the version
+     * carried no comment (legacy `card_versions.comment`). Plain text,
+     * stripped and non-blank when present — the same body stored on
+     * the companion murmur row, which links back through
+     * `murmurs.origin_card_version` (Phase 20).
+     */
+    comment: text("comment"),
     /** True only on the final version appended when the card is deleted. */
     isDeletion: integer("is_deletion", { mode: "boolean" })
       .notNull()

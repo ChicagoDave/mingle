@@ -212,7 +212,8 @@ export default function ProjectSettings() {
         <Link to={`/projects/${project.identifier}/groups`}>Groups</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/cards`}>Cards</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link>
+        <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link>
       </p>
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
 

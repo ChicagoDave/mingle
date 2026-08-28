@@ -36,6 +36,7 @@ import {
   pageNameError,
   pageNameFromIdentifier,
 } from "~/domain/pages/naming.server";
+import { CARD_REFERENCE as CARD_LINK } from "~/domain/text-references.server";
 
 /** A parsed body node: either literal text or an element with children. */
 export type ContentNode =
@@ -424,8 +425,6 @@ export type MacroExpansion = (
 /** Matches `[[Page]]`, `[[display|Page]]` and `[[project/Page]]`. */
 const WIKI_LINK = /\[\[[\t ]*(?:([^|\]]+?)[\t ]*\|)?[\t ]*(?:([a-z0-9_-]+)[\t ]*\/[\t ]*)?([^\]]*?)[\t ]*\]\]/gi;
 
-/** Matches a `#123` card reference not glued to a preceding word. */
-const CARD_LINK = /(^|[^\w&#])#(\d+)/g;
 
 /** Builds an anchor node. */
 function link(href: string, text: string, className?: string): ContentNode {

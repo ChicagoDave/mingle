@@ -3,8 +3,15 @@
  *
  * Purpose: every command handler records the fact it produced (rule 10:
  * a command yields at least one event or rejects — silent state changes
- * are bugs). This table is the durable record of those facts and, in
- * later phases, feeds the history feed, murmurs, and subscriptions.
+ * are bugs). This table is the durable record of those facts.
+ *
+ * It is NOT the source of the user-facing history feed, despite an
+ * earlier note here anticipating that it would be. A row here records
+ * what a COMMAND did and carries no snapshot of what the thing looked
+ * like at the time, so a feed built on it would have to join back to
+ * the live row and would render every past entry under today's name.
+ * Phase 21's feed projects over the version trails instead, which carry
+ * the historical values (ADR-0004); see app/domain/history/read.server.ts.
  *
  * Public interface: `domainEvents` (Drizzle table), written only through
  * app/domain/events.server.ts.
