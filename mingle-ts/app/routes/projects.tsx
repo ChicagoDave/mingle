@@ -12,6 +12,8 @@
 import { sql } from "drizzle-orm";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects";
+import { ActionBar } from "~/components/forms";
+import "../styles/projects-list.css";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
 import { requireUserId } from "~/auth/session.server";
@@ -32,30 +34,45 @@ export async function loader({ request }: Route.LoaderArgs) {
   return { projects: rows };
 }
 
-/** Project list page. Styling is deliberately minimal until the UX-harvest phases. */
+/** Project list — legacy projects/list.rhtml with projects/_projects.rhtml. */
 export default function Projects() {
   const { projects: rows } = useLoaderData<typeof loader>();
 
   return (
-    <main style={{ maxWidth: 640, margin: "4rem auto", fontFamily: "sans-serif" }}>
-      <h1>Projects</h1>
-      {rows.length === 0 ? (
-        <p>There are no projects yet.</p>
-      ) : (
-        <ul>
-          {rows.map((project) => (
-            <li key={project.id}>
-              <strong>{project.name}</strong> <small>({project.identifier})</small>
-              {project.description ? <> — {project.description}</> : null}{" "}
-              <Link to={`/projects/${project.identifier}/settings`}>settings</Link>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p>
-        <Link to="/projects/new">Create a project</Link> · <Link to="/projects/import">Import a project</Link> ·{" "}
-        <Link to="/programs">Programs</Link>
-      </p>
-    </main>
+    <div id="projects-list-page">
+      <ActionBar>
+        <Link to="/projects/new" className="project-new link_as_button primary">
+          New project
+        </Link>
+        <Link to="/projects/import" className="project-import link_as_button">
+          Import project
+        </Link>
+      </ActionBar>
+      <div className="projects_list">
+        {rows.length === 0 ? (
+          <p className="italic-light">There are currently no projects to list.</p>
+        ) : (
+          rows.map((project) => (
+            <div className="project" key={project.id} id={`project_${project.identifier}`}>
+              <Link to={`/projects/${project.identifier}/cards`} className="project-icon-link">
+                <div className="project-icon-holder">
+                  <span className="project-initial">{project.name.charAt(0).toUpperCase()}</span>
+                </div>
+              </Link>
+              <div className="project-description">
+                <h2>
+                  <Link to={`/projects/${project.identifier}/cards`}>{project.name}</Link>
+                </h2>
+                <p>{project.description ?? ""}</p>
+                <Link to={`/projects/${project.identifier}/settings`} className="link-with-icon">
+                  Project admin
+                </Link>
+              </div>
+              <div className="clear_float" />
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   );
 }

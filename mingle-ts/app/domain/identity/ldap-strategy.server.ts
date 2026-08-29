@@ -8,7 +8,9 @@
  * login; when a group is configured, require a group entry naming the
  * user's DN; then bind as the user's DN with the given password. On
  * success the entry's name and mail attributes become the claims that
- * `signInExternalUser` maps to a Mingle account.
+ * `signInExternalUser` maps to a Mingle account, and the configured
+ * LDAP group → Mingle group mappings are reconciled for the user
+ * (ldap-group-sync.server.ts, P-6).
  *
  * The directory itself is a port (`LdapDirectory`): this module never
  * opens a socket, so the protocol client is replaceable and the
@@ -24,6 +26,7 @@ import type { UserRow } from "~/db/schema/identity";
 import { type CommandResult, reject } from "~/domain/command.server";
 import type { LdapSettings } from "~/domain/identity/auth-configuration.server";
 import { signInExternalUser } from "~/domain/identity/external-login.server";
+import { ldapGroupsHolding, parseLdapGroupMappings, reconcileLdapGroups } from "~/domain/identity/ldap-group-sync.server";
 
 /** A directory entry as the strategy needs it. */
 export interface LdapEntry {
@@ -116,7 +119,7 @@ export async function authenticateViaLdap(
     if (!(await directory.bind(entry.dn, password))) return reject("login", INVALID);
 
     const first = (attribute: string): string | null => (attribute && entry.attributes[attribute]?.[0]) || null;
-    return signInExternalUser(db, {
+    const signedIn = signInExternalUser(db, {
       claims: {
         kind: "ldap",
         subject: first(settings.loginAttribute) ?? login,
@@ -126,6 +129,14 @@ export async function authenticateViaLdap(
       },
       autoEnroll: settings.autoEnroll,
     });
+    if (!signedIn.ok) return signedIn;
+    // P-6: the directory's groups are the authority for the mapped Mingle groups, on every sign-in.
+    const mappings = parseLdapGroupMappings(settings.groupMappings).mappings;
+    if (mappings.length > 0) {
+      const holding = await ldapGroupsHolding(directory, settings, mappings, entry.dn);
+      reconcileLdapGroups(db, { userId: signedIn.value.id, mappings, holding });
+    }
+    return signedIn;
   } catch {
     return reject("login", "The directory server could not be reached");
   } finally {

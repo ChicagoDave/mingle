@@ -34,6 +34,11 @@ export const projects = sqliteTable(
      */
     identifier: text("identifier").notNull().unique(),
     description: text("description"),
+    /**
+     * JSON array of the strategy kinds this project admits (ADR-0021);
+     * "[]" = no constraint. Validity enforced in the domain layer.
+     */
+    permittedStrategyKinds: text("permitted_strategy_kinds").notNull().default("[]"),
     /** User who created the project (plain id; enforced in the domain layer). */
     createdByUserId: integer("created_by_user_id").notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" })

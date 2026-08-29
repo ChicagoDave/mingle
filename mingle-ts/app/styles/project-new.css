@@ -1,0 +1,31 @@
+/* New project — the template picker (legacy projects/_new_form.rhtml `.templates .template`). */
+.templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.templates .template {
+  display: block;
+  width: 220px;
+  padding: 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+.templates .template:has(input:checked) {
+  border-color: #3a7;
+  box-shadow: 0 0 0 2px #cfe9dc;
+}
+.templates .template input {
+  margin-right: 6px;
+}
+.templates .template .name {
+  font-weight: bold;
+}
+.templates .template .description {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #666;
+}

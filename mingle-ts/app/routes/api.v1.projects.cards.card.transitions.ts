@@ -2,7 +2,7 @@
  * /api/v1/projects/:identifier/cards/:number/transitions — the
  * transitions of one card (resource route, JSON).
  *
- * GET  lists `ApiAvailableTransition[]`: the transitions the calling
+ * GET  lists an `ApiPage<ApiAvailableTransition>` (`?limit=`, `?cursor=`): the transitions the calling
  *      user may execute on the card right now, with the inputs each
  *      needs (legacy Card#transitions).
  * POST executes one via ExecuteTransition; body
@@ -37,13 +37,18 @@ import {
   resolvePropertyInput,
 } from "~/api/resources.server";
 import type { ApiTransitionExecution, FieldErrors } from "~/shared/wire-types";
+import { keysetPage, readPageParams } from "~/api/pagination.server";
 
-/** GET: the transitions the caller may execute on the card now. */
+/** GET: one page of the transitions the caller may execute on the card now, by name. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const user = await requireApiUser(request);
   const project = requireProject(db, params.identifier);
   const card = requireCard(db, project.id, params.number);
-  return jsonResponse(availableTransitionResources(db, project.id, card.number, user.id));
+  const page = readPageParams(new URL(request.url));
+  const byName = availableTransitionResources(db, project.id, card.number, user.id).sort(
+    (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id - b.id,
+  );
+  return jsonResponse(keysetPage(byName, page, (row) => [row.name.toLowerCase(), row.id]));
 }
 
 /**

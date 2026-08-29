@@ -1,0 +1,67 @@
+/**
+ * New-card page styles (P-17) — harvested from the legacy cards.scss
+ * edit form: `#card-top` with the large card number (`#card-index`)
+ * beside the full-width title field (`#card-edit-title`), the
+ * description editor area, and the `#card-bottom` type/properties
+ * strip. The CKEditor description is a plain textarea in the port.
+ *
+ * Owner context: Card Management (presentation).
+ */
+
+#card {
+  border: 1px solid #ccc;
+  background: #fff;
+  padding: 15px;
+  margin-bottom: 10px;
+}
+
+#card-top {
+  overflow: hidden;
+  border-bottom: 1px dotted #ccc;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+
+#card-top h1#card-index {
+  float: left;
+  margin: 0 15px 0 0;
+  padding: 6px 0 0;
+  border: 0;
+  font-size: 21px;
+  color: #999;
+  white-space: nowrap;
+}
+
+#card-edit-title-container {
+  overflow: hidden;
+}
+
+#card-edit-title input {
+  width: 100%;
+  font-size: 21px;
+  font-weight: 300;
+  padding: 5px 8px;
+  box-sizing: border-box;
+}
+
+#card-description-container textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 8px;
+  min-height: 220px;
+}
+
+#card-bottom {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dotted #ccc;
+}
+
+#card-bottom .card-type-editor {
+  font-size: 12px;
+}
+
+#card-bottom .card-type-editor label {
+  display: inline;
+}

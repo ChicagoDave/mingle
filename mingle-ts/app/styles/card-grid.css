@@ -151,3 +151,26 @@ table.swimming-pool {
   color: #c00;
   padding: 0 16px;
 }
+
+/* WIP limits (P-3; legacy .lane-wip / WipEditPopup, rendered inline here). */
+.swimming-pool th.lane_header .lane-wip {
+  clear: both;
+  font-size: 11px;
+  font-weight: normal;
+  color: #666;
+}
+.swimming-pool th.lane_header.over-limit {
+  background: #fde8e8;
+}
+.swimming-pool th.lane_header.over-limit .lane-card-number {
+  color: #c00;
+  font-weight: bold;
+}
+.swimming-pool th.lane_header .wip-limit-form {
+  display: inline-block;
+  margin-left: 4px;
+}
+.swimming-pool th.lane_header .wip-limit-form input {
+  width: 3em;
+  font-size: 11px;
+}

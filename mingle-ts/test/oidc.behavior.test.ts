@@ -177,11 +177,11 @@ async function finish(callbackUrl: URL, cookie: string | null) {
 
 describe("single sign-on through a real OpenID provider", () => {
   it("offers the button on /login only when enabled", async () => {
-    const shown = (await loginRoute.loader({ request: new Request(`${APP_ORIGIN}/login`), params: {}, context: {} } as never)) as { sso: { displayName: string } | null };
-    expect(shown.sso).toEqual({ displayName: "Corp SSO" });
+    const shown = (await loginRoute.loader({ request: new Request(`${APP_ORIGIN}/login`), params: {}, context: {} } as never)) as { sso: { kind: string; displayName: string; href: string }[] };
+    expect(shown.sso).toEqual([{ kind: "oidc", displayName: "Corp SSO", href: "/auth/oidc" }]);
     mustOk(configureAuthentication(db, sealer, { kind: "oidc", settings: { ...DEFAULT_OIDC_SETTINGS, enabled: false }, actorUserId: adminId }), "disable");
-    const hidden = (await loginRoute.loader({ request: new Request(`${APP_ORIGIN}/login`), params: {}, context: {} } as never)) as { sso: unknown };
-    expect(hidden.sso).toBeNull();
+    const hidden = (await loginRoute.loader({ request: new Request(`${APP_ORIGIN}/login`), params: {}, context: {} } as never)) as { sso: unknown[] };
+    expect(hidden.sso).toEqual([]);
     await expect(startRoute.loader({ request: new Request(`${APP_ORIGIN}/auth/oidc`), params: {}, context: {} } as never)).rejects.toMatchObject({ status: 404 });
   });
 

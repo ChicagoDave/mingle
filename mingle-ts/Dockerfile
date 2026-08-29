@@ -25,10 +25,20 @@ WORKDIR /app
 RUN npm run build
 
 FROM node:22-alpine
+# Stamped by the publish workflow (ADR-0022) and by compose.build.yaml;
+# test/image.real.test.ts asserts the version label matches the tag.
+ARG MINGLE_VERSION=0.0.0-dev
+ARG MINGLE_REVISION=""
+LABEL org.opencontainers.image.title="Mingle" \
+      org.opencontainers.image.source="https://github.com/ChicagoDave/mingle" \
+      org.opencontainers.image.version="${MINGLE_VERSION}" \
+      org.opencontainers.image.revision="${MINGLE_REVISION}" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 ENV NODE_ENV=production \
     PORT=3000 \
     DATABASE_FILE=/data/mingle.db \
-    ATTACHMENTS_DIR=/data/attachments
+    ATTACHMENTS_DIR=/data/attachments \
+    BACKUPS_DIR=/data/backups
 RUN addgroup -S mingle && adduser -S -G mingle mingle \
     && mkdir -p /data && chown mingle:mingle /data
 COPY --chown=mingle:mingle ./package.json package-lock.json /app/
@@ -37,6 +47,8 @@ COPY --from=build-env --chown=mingle:mingle /app/build /app/build
 # Migrations are applied at startup (ADR-0002) — the runtime image must
 # carry them or the app refuses to boot.
 COPY --chown=mingle:mingle ./drizzle /app/drizzle
+# The shipped project templates, offered on New Project (ADR-0024).
+COPY --chown=mingle:mingle ./templates /app/templates
 WORKDIR /app
 USER mingle
 VOLUME ["/data"]

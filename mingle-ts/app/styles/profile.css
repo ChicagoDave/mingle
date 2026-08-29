@@ -1,0 +1,53 @@
+/**
+ * Profile page styles (P-17) — harvested from the legacy profile.scss
+ * (`.basic-profile-information` label/value rows, `.deactivation-notice`)
+ * and the users/show.rhtml tabs pane (`.tabs_pane`), with the HMAC
+ * auth-key panel (`#hmac-form`, `#hmac-key-warning`).
+ *
+ * Owner context: Identity & Access (presentation).
+ */
+
+.basic-profile-information label {
+  display: inline;
+  margin-right: 5px;
+  font-weight: bold;
+}
+
+.basic-profile-information p {
+  margin: 10px 0 10px 0;
+}
+
+.basic-profile-information p span {
+  color: #555555;
+}
+
+.deactivation-notice {
+  color: #888888;
+  margin-left: 10px;
+}
+
+.tabs_pane {
+  margin-top: 20px;
+  border-top: 1px solid #ddd;
+}
+
+.tabs_pane h2 {
+  margin-top: 20px;
+}
+
+#hmac-form {
+  margin-top: 10px;
+}
+
+#hmac-form form {
+  display: inline-block;
+}
+
+#hmac-key-warning {
+  display: inline-block;
+  margin-left: 10px;
+}
+
+#api-keys code {
+  font-size: 11px;
+}

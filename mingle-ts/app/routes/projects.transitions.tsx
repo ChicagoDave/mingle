@@ -31,8 +31,10 @@
  * Owner context: Card Management (HTTP adapter).
  */
 import { asc, eq, sql } from "drizzle-orm";
-import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.transitions";
+import { ActionBar, FormItem, ErrorLines, FlashBox, AdminPage } from "~/components/forms";
+import "../styles/transitions.css";
 import {
   TRANSITION_SPECIAL_VALUES,
   type FieldErrors,
@@ -285,7 +287,7 @@ export async function action({ request, params }: Route.ActionArgs) {
   throw new Response("Unknown intent", { status: 400 });
 }
 
-/** Card transitions page: the list and the define form. Minimal styling until UX harvest. */
+/** Card transitions — legacy transitions/list.rhtml with _transition.rhtml and _action_bar.rhtml, plus transitions/new.rhtml's form and the transition-workflow generator, beside the admin nav. */
 export default function TransitionsPage() {
   const {
     project,
@@ -307,295 +309,319 @@ export default function TransitionsPage() {
   );
 
   return (
-    <main style={{ maxWidth: 760, margin: "4rem auto", fontFamily: "sans-serif" }}>
+    <AdminPage identifier={project.identifier} current="transitions">
+      <ActionBar>
+        <a href="#new-transition" className="add-transition link_as_button primary">
+          Create new card transition
+        </a>
+        <a href="#transition-workflow" className="add-transition-workflow">
+          Create new transition workflow
+        </a>
+      </ActionBar>
       <h1>Card transitions</h1>
-      <p>
-        <Link to={`/projects/${project.identifier}/cards`}>{project.name}</Link>
-      </p>
-      {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
+      {saved ? <FlashBox kind="success">Transition was successfully saved.</FlashBox> : null}
+      {generated ? (
+        <FlashBox kind="success">
+          Generated {generated.names.length} transition{generated.names.length === 1 ? "" : "s"} for{" "}
+          {generated.cardTypeName} / {generated.propertyName}: {generated.names.join(", ")}.
+        </FlashBox>
+      ) : null}
       <ErrorLines field="authorization" errors={errors} />
       <ErrorLines field="transition" errors={errors} />
 
-      {transitions.length === 0 ? (
-        <p>There are currently no transitions to list.</p>
-      ) : (
-        transitions.map((transition) => (
-          <section
-            key={transition.id}
-            style={{ border: "1px solid #ccc", padding: "0.5rem 1rem", marginBottom: "1rem" }}
-          >
-            <h3>{transition.name}</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left" }}>
-                    If a card <b>has</b> these properties:
-                  </th>
-                  <th style={{ textAlign: "left" }}>
-                    Provide a transition to <b>set</b> these properties:
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ verticalAlign: "top" }}>
-                    <div>
-                      Type: {transition.cardTypeName ?? "(any)"}
-                    </div>
-                    {transition.requires.length === 0 && !transition.cardTypeName ? (
-                      <div>Any value for any property</div>
-                    ) : (
-                      transition.requires.map((line) => <div key={line}>{line}</div>)
-                    )}
-                  </td>
-                  <td style={{ verticalAlign: "top" }}>
-                    {transition.sets.map((line) => (
-                      <div key={line}>{line}</div>
-                    ))}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <Form method="post">
-              <input type="hidden" name="intent" value="delete" />
-              <input type="hidden" name="transitionId" value={transition.id} />
-              <button type="submit">Delete</button>
-            </Form>
-          </section>
-        ))
-      )}
+      <div id="content-simple">
+        {transitions.length === 0 ? (
+          <div id="no-transition-message" className="no-transition-message">
+            There are currently no transitions to list. You can <a href="#new-transition">create a new transition</a> or{" "}
+            <a href="#transition-workflow">generate a new transition workflow</a>.
+          </div>
+        ) : null}
+        <div id="all-transitions">
+          {transitions.map((transition) => (
+            <div className="transition-container" id={`transition-${transition.id}`} key={transition.id}>
+              <h3>{transition.name}</h3>
+              <div className="transition-detail">
+                <table className="reset-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        If a card <b>has</b> these properties:
+                      </th>
+                      <th>&nbsp;</th>
+                      <th>
+                        Provide a transition to <b>set</b> these properties:
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td className="transition-from">
+                        {transition.cardTypeName ? (
+                          <p className="card-type">
+                            <span className="property-name">Type:</span>{" "}
+                            <span className="property-value">{transition.cardTypeName}</span>
+                          </p>
+                        ) : null}
+                        {transition.requires.length === 0 && !transition.cardTypeName ? "Any value for any property" : null}
+                        {transition.requires.map((line) => (
+                          <p key={line}>{line}</p>
+                        ))}
+                      </td>
+                      <td className="align-center">
+                        <span className="transition-arrow-glyph" aria-label="Transition from this to this">
+                          →
+                        </span>
+                      </td>
+                      <td className="transition-to">
+                        {transition.sets.map((line) => (
+                          <p key={line}>{line}</p>
+                        ))}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="inline-forms">
+                <Form method="post">
+                  <input type="hidden" name="intent" value="delete" />
+                  <input type="hidden" name="transitionId" value={transition.id} />
+                  <button type="submit" className="delete-transition" id={`delete_${transition.id}`}>
+                    Delete
+                  </button>
+                </Form>
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
 
-      <h2>Generate a workflow</h2>
-      <p style={{ color: "#555", fontSize: 13 }}>
-        Generates one transition per value of a managed list property —
-        each moving a card from the previous value to the next. Pair it
-        with the property's <em>Only a transition may change this
-        property</em> setting so cards move along the workflow instead of
-        jumping between values.
+      <h2 id="transition-workflow">Generate a transition workflow</h2>
+      <p className="notes">
+        Generates one transition per value of a managed list property — each moving a card from the previous value
+        to the next. Pair it with the property's <em>Only a transition may change this property</em> setting so cards
+        move along the workflow instead of jumping between values.
       </p>
-      {generated ? (
-        <p style={{ color: "seagreen" }}>
-          Generated {generated.names.length} transition
-          {generated.names.length === 1 ? "" : "s"} for{" "}
-          {generated.cardTypeName} / {generated.propertyName}:{" "}
-          {generated.names.join(", ")}.
-        </p>
-      ) : null}
       <ErrorLines field="cardType" errors={errors} />
       <ErrorLines field="property" errors={errors} />
-      <ErrorLines field="prerequisites" errors={errors} />
-      <ErrorLines field="actions" errors={errors} />
       <ErrorLines field="name" errors={workflow.errors} />
       <ErrorLines field="cardType" errors={workflow.errors} />
       <ErrorLines field="property" errors={workflow.errors} />
       {listProperties.length === 0 ? (
-        <p>No managed list properties yet — a workflow needs one to order its steps.</p>
+        <p className="italic-light">No managed list properties yet — a workflow needs one to order its steps.</p>
       ) : (
-        <>
-          <Form method="get" style={{ marginBottom: "0.5rem" }}>
-            <label>
-              Card type{" "}
-              <select
-                name="workflow_card_type"
-                defaultValue={workflow.cardTypeId ?? ""}
-              >
-                <option value="">Select…</option>
+        <div className="transition-workflow-container">
+          <Form method="get">
+            <ul className="transition-actions inline-list">
+              <li>
+                <label htmlFor="workflow_card_type">Card type:</label>{" "}
+                <select
+                  id="workflow_card_type"
+                  name="workflow_card_type"
+                  className="card-type-selection"
+                  defaultValue={workflow.cardTypeId ?? ""}
+                >
+                  <option value="">Select…</option>
+                  {cardTypes.map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.name}
+                    </option>
+                  ))}
+                </select>
+              </li>
+              <li>
+                <label htmlFor="workflow_property">Property:</label>{" "}
+                <select
+                  id="workflow_property"
+                  name="workflow_property"
+                  className="property-definition-selection"
+                  defaultValue={workflow.propertyDefinitionId ?? ""}
+                >
+                  <option value="">Select…</option>
+                  {listProperties.map((property) => (
+                    <option key={property.id} value={property.id}>
+                      {property.name}
+                    </option>
+                  ))}
+                </select>
+              </li>
+              <li>
+                <button type="submit" className="inline">
+                  Preview workflow
+                </button>
+              </li>
+            </ul>
+          </Form>
+          {workflow.preview ? (
+            <>
+              {workflow.preview.existingTransitionsCount > 0 ? (
+                <FlashBox kind="warning">
+                  {workflow.preview.existingTransitionsCount} existing transition
+                  {workflow.preview.existingTransitionsCount === 1 ? "" : "s"} for {workflow.preview.cardTypeName}{" "}
+                  already use {workflow.preview.propertyName}. Generating adds to them rather than replacing them.
+                </FlashBox>
+              ) : null}
+              <ol className="workflow-preview">
+                {workflow.preview.steps.map((step) => (
+                  <li key={step.name}>
+                    <strong>{step.name}</strong> — requires {workflow.preview?.propertyName} to be{" "}
+                    {step.from === null ? "(not set)" : step.from}, sets it to {step.to}
+                  </li>
+                ))}
+              </ol>
+              <Form method="post">
+                <input type="hidden" name="intent" value="generate-workflow" />
+                <input type="hidden" name="cardTypeId" value={workflow.cardTypeId ?? ""} />
+                <input type="hidden" name="propertyDefinitionId" value={workflow.propertyDefinitionId ?? ""} />
+                <ActionBar>
+                  <button type="submit" className="primary">
+                    Generate {workflow.preview.steps.length} transition
+                    {workflow.preview.steps.length === 1 ? "" : "s"}
+                  </button>
+                </ActionBar>
+              </Form>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      <h2 id="new-transition">Create a new transition</h2>
+      <Form method="post" id="transition-form">
+        <input type="hidden" name="intent" value="create" />
+        <div className="form_contents">
+          <div className="form_section">
+            <FormItem label="Name:" htmlFor="transition_name" required field="name" errors={errors}>
+              <input id="transition_name" name="name" />
+            </FormItem>
+            <FormItem label="Card type:" htmlFor="transition_card_type" field="cardType" errors={errors}>
+              <select id="transition_card_type" name="cardTypeId" className="card-type-selection" defaultValue="">
+                <option value="">(any)</option>
                 {cardTypes.map((type) => (
                   <option key={type.id} value={type.id}>
                     {type.name}
                   </option>
                 ))}
               </select>
-            </label>{" "}
-            <label>
-              Property{" "}
-              <select
-                name="workflow_property"
-                defaultValue={workflow.propertyDefinitionId ?? ""}
-              >
-                <option value="">Select…</option>
-                {listProperties.map((property) => (
-                  <option key={property.id} value={property.id}>
-                    {property.name}
-                  </option>
-                ))}
-              </select>
-            </label>{" "}
-            <button type="submit">Preview workflow</button>
-          </Form>
-          {workflow.preview ? (
-            <>
-              {workflow.preview.existingTransitionsCount > 0 ? (
-                <p style={{ color: "#b26a00" }}>
-                  {workflow.preview.existingTransitionsCount} existing transition
-                  {workflow.preview.existingTransitionsCount === 1 ? "" : "s"} for{" "}
-                  {workflow.preview.cardTypeName} already use{" "}
-                  {workflow.preview.propertyName}. Generating adds to them rather
-                  than replacing them.
-                </p>
-              ) : null}
-              <ol>
-                {workflow.preview.steps.map((step) => (
-                  <li key={step.name}>
-                    <strong>{step.name}</strong> — requires{" "}
-                    {workflow.preview?.propertyName} to be{" "}
-                    {step.from === null ? "(not set)" : step.from}, sets it to{" "}
-                    {step.to}
-                  </li>
-                ))}
-              </ol>
-              <Form method="post">
-                <input type="hidden" name="intent" value="generate-workflow" />
-                <input
-                  type="hidden"
-                  name="cardTypeId"
-                  value={workflow.cardTypeId ?? ""}
-                />
-                <input
-                  type="hidden"
-                  name="propertyDefinitionId"
-                  value={workflow.propertyDefinitionId ?? ""}
-                />
-                <button type="submit">
-                  Generate {workflow.preview.steps.length} transition
-                  {workflow.preview.steps.length === 1 ? "" : "s"}
-                </button>
-              </Form>
-            </>
-          ) : null}
-        </>
-      )}
+            </FormItem>
+          </div>
 
-      <h2>Create a new transition</h2>
-      <Form method="post">
-        <input type="hidden" name="intent" value="create" />
-        <p>
-          <label>
-            Name:
-            <br />
-            <input name="name" />
-          </label>
-          <ErrorLines field="name" errors={errors} />
-        </p>
-        <p>
-          <label>
-            Card type:
-            <br />
-            <select name="cardTypeId" defaultValue="">
-              <option value="">(any)</option>
-              {cardTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ErrorLines field="cardType" errors={errors} />
-        </p>
+          <div id="content-simple">
+            {properties.length === 0 ? (
+              <p className="italic-light">No properties defined. Define them in project settings.</p>
+            ) : (
+              <table className="reset-table transition-properties">
+                <thead>
+                  <tr>
+                    <th>Property</th>
+                    <th>
+                      If a card <b>has</b>:
+                    </th>
+                    <th>
+                      Transition <b>sets</b> to:
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {properties.map((property) => (
+                    <tr key={property.id}>
+                      <td className="property-name">{property.name}</td>
+                      <td className="transition-from">
+                        <ValueField
+                          name={`requires[${property.id}]`}
+                          property={property}
+                          teamMembers={teamMembers}
+                          specials={[
+                            { value: "", label: "(any)" },
+                            { value: TRANSITION_SPECIAL_VALUES.SET, label: "(set)" },
+                            {
+                              value: TRANSITION_SPECIAL_VALUES.NOT_SET,
+                              label: "(not set)",
+                            },
+                          ]}
+                        />
+                      </td>
+                      <td className="transition-to">
+                        <ValueField
+                          name={`sets[${property.id}]`}
+                          property={property}
+                          teamMembers={teamMembers}
+                          specials={[
+                            { value: "", label: "(no change)" },
+                            { value: TRANSITION_SPECIAL_VALUES.NOT_SET, label: "(not set)" },
+                            {
+                              value: TRANSITION_SPECIAL_VALUES.USER_INPUT_REQUIRED,
+                              label: TRANSITION_SPECIAL_VALUES.USER_INPUT_REQUIRED,
+                            },
+                            {
+                              value: TRANSITION_SPECIAL_VALUES.USER_INPUT_OPTIONAL,
+                              label: TRANSITION_SPECIAL_VALUES.USER_INPUT_OPTIONAL,
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <ErrorLines field="prerequisites" errors={errors} />
+            <ErrorLines field="actions" errors={errors} />
+            <ErrorLines field="value" errors={errors} />
+          </div>
 
-        {properties.length === 0 ? (
-          <p>No properties defined. Define them in project settings.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left" }}>Property</th>
-                <th style={{ textAlign: "left" }}>
-                  If a card <b>has</b>:
-                </th>
-                <th style={{ textAlign: "left" }}>
-                  Transition <b>sets</b> to:
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {properties.map((property) => (
-                <tr key={property.id}>
-                  <td>{property.name}</td>
-                  <td>
-                    <ValueField
-                      name={`requires[${property.id}]`}
-                      property={property}
-                      teamMembers={teamMembers}
-                      specials={[
-                        { value: "", label: "(any)" },
-                        { value: TRANSITION_SPECIAL_VALUES.SET, label: "(set)" },
-                        {
-                          value: TRANSITION_SPECIAL_VALUES.NOT_SET,
-                          label: "(not set)",
-                        },
-                      ]}
-                    />
-                  </td>
-                  <td>
-                    <ValueField
-                      name={`sets[${property.id}]`}
-                      property={property}
-                      teamMembers={teamMembers}
-                      specials={[
-                        { value: "", label: "(no change)" },
-                        { value: TRANSITION_SPECIAL_VALUES.NOT_SET, label: "(not set)" },
-                        {
-                          value: TRANSITION_SPECIAL_VALUES.USER_INPUT_REQUIRED,
-                          label: TRANSITION_SPECIAL_VALUES.USER_INPUT_REQUIRED,
-                        },
-                        {
-                          value: TRANSITION_SPECIAL_VALUES.USER_INPUT_OPTIONAL,
-                          label: TRANSITION_SPECIAL_VALUES.USER_INPUT_OPTIONAL,
-                        },
-                      ]}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <ErrorLines field="prerequisites" errors={errors} />
-        <ErrorLines field="actions" errors={errors} />
-        <ErrorLines field="value" errors={errors} />
-
-        <fieldset style={{ marginTop: "1rem" }}>
-          <legend>Used by:</legend>
-          <label>
-            <input type="radio" name="usedBy" value="all" defaultChecked /> All team members
-          </label>
-          <br />
-          <label>
-            <input type="radio" name="usedBy" value="members" /> Only selected team members
-          </label>
-          {teamMembers.length === 0 ? (
-            <div>There are no team members in the project.</div>
-          ) : (
-            <div style={{ marginLeft: "1.5rem" }}>
-              {teamMembers.map((member) => (
-                <label key={member.id} style={{ display: "block" }}>
-                  <input type="checkbox" name="userIds[]" value={member.id} /> {member.name}
+          <div className="form_section last used-by">
+            <h4>Used by:</h4>
+            <ul className="vertical-neighbors">
+              <li>
+                <label className="inline">
+                  <input type="radio" name="usedBy" value="all" defaultChecked /> All team members
                 </label>
-              ))}
-            </div>
-          )}
-          <label>
-            <input type="radio" name="usedBy" value="groups" /> Only team members of selected
-            user groups
-          </label>
-          {groups.length === 0 ? (
-            <div>There are no groups in the project.</div>
-          ) : (
-            <div style={{ marginLeft: "1.5rem" }}>
-              {groups.map((group) => (
-                <label key={group.id} style={{ display: "block" }}>
-                  <input type="checkbox" name="groupIds[]" value={group.id} /> {group.name}
+              </li>
+              <li>
+                <label className="inline">
+                  <input type="radio" name="usedBy" value="members" /> Only selected team members
                 </label>
-              ))}
-            </div>
-          )}
-        </fieldset>
-        <p>
-          <button type="submit">Create transition</button>
-        </p>
+                {teamMembers.length === 0 ? (
+                  <div className="notes">There are no team members in the project.</div>
+                ) : (
+                  <ul className="vertical-neighbors selected-members">
+                    {teamMembers.map((member) => (
+                      <li key={member.id}>
+                        <label className="inline">
+                          <input type="checkbox" name="userIds[]" value={member.id} /> {member.name}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+              <li>
+                <label className="inline">
+                  <input type="radio" name="usedBy" value="groups" /> Only team members of selected user groups
+                </label>
+                {groups.length === 0 ? (
+                  <div className="notes">There are no groups in the project.</div>
+                ) : (
+                  <ul className="vertical-neighbors selected-groups">
+                    {groups.map((group) => (
+                      <li key={group.id}>
+                        <label className="inline">
+                          <input type="checkbox" name="groupIds[]" value={group.id} /> {group.name}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            </ul>
+          </div>
+        </div>
+        <ActionBar>
+          <button type="submit" className="save">
+            Create transition
+          </button>
+        </ActionBar>
       </Form>
-    </main>
+    </AdminPage>
   );
 }
 
@@ -647,17 +673,5 @@ function ValueField({
           ))}
       </datalist>
     </>
-  );
-}
-
-function ErrorLines({ field, errors }: { field: string; errors: FieldErrors }) {
-  const messages = errors[field];
-  if (!messages?.length) return null;
-  return (
-    <ul style={{ color: "crimson", margin: "0.25rem 0" }}>
-      {messages.map((message) => (
-        <li key={message}>{message}</li>
-      ))}
-    </ul>
   );
 }

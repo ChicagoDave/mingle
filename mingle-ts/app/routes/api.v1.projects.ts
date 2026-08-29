@@ -2,7 +2,8 @@
  * /api/v1/projects — the project collection (resource route, JSON).
  *
  * GET  lists every project (as the project list page does for any
- *      logged-in user), ordered by name.
+ *      logged-in user), ordered by name, as an `ApiPage<ApiProject>`
+ *      (`?limit=`, `?cursor=` — app/api/pagination.server.ts).
  * POST creates a project via CreateProject (site admin only, as in
  *      the UI); body `ApiCreateProjectBody`; 201 with `ApiProject`.
  *
@@ -11,7 +12,7 @@
  * Public interface: `loader`, `action`.
  * Owner context: Public API (HTTP adapter) for Card Management.
  */
-import { sql } from "drizzle-orm";
+import { asc, sql } from "drizzle-orm";
 import type { Route } from "./+types/api.v1.projects";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -19,12 +20,15 @@ import { createProject } from "~/domain/projects/commands.server";
 import { requireApiUser } from "~/api/auth.server";
 import { commandResponse, jsonResponse, methodNotAllowed, optionalString, readJsonObject, requiredString } from "~/api/http.server";
 import { projectResource } from "~/api/resources.server";
+import { keysetPage, readPageParams } from "~/api/pagination.server";
 
-/** GET: every project, ordered by name. */
+/** GET: one page of projects, ordered by name. */
 export async function loader({ request }: Route.LoaderArgs) {
   await requireApiUser(request);
-  const rows = db.select().from(projects).orderBy(sql`lower(${projects.name})`).all();
-  return jsonResponse(rows.map(projectResource));
+  const page = readPageParams(new URL(request.url));
+  const rows = db.select().from(projects).orderBy(sql`lower(${projects.name})`, asc(projects.id)).all();
+  const paged = keysetPage(rows, page, (row) => [row.name.toLowerCase(), row.id]);
+  return jsonResponse({ items: paged.items.map(projectResource), nextCursor: paged.nextCursor });
 }
 
 /** POST: CreateProject from a JSON body; 201 with the project. */

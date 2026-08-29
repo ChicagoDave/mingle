@@ -12,24 +12,24 @@
  * Owner context: infrastructure (HTTP adapter composition) for
  * Identity & Access.
  */
-import type { UserRow } from "~/db/schema/identity";
 import { db } from "~/db/client.server";
 import { openLdapDirectory } from "~/auth/ldap-directory.server";
 import { sealer } from "~/auth/sealer.server";
 import type { CommandResult } from "~/domain/command.server";
 import { loadAuthenticationConfiguration } from "~/domain/identity/auth-configuration.server";
-import { authenticateCredentials, ldapStrategy, passwordStrategy } from "~/domain/identity/strategy.server";
+import { authenticateCredentialsDetailed, type AuthenticatedCredentials, ldapStrategy, passwordStrategy } from "~/domain/identity/strategy.server";
 
 /**
  * Authenticates the sign-in form's credentials through the configured
  * strategies.
  *
- * @returns the signed-in user, or the primary strategy's rejection
+ * @returns the signed-in user and the strategy kind that vouched for
+ *   them (recorded on the session), or the primary strategy's rejection
  */
-export async function signInWithCredentials(credentials: { login: string; password: string }): Promise<CommandResult<UserRow>> {
+export async function signInWithCredentials(credentials: { login: string; password: string }): Promise<CommandResult<AuthenticatedCredentials>> {
   const { ldap } = loadAuthenticationConfiguration(db, sealer);
   const strategies = ldap.enabled
     ? [ldapStrategy(db, ldap, openLdapDirectory), passwordStrategy(db, { adminsOnly: true })]
     : [passwordStrategy(db, { adminsOnly: false })];
-  return authenticateCredentials(strategies, credentials);
+  return authenticateCredentialsDetailed(strategies, credentials);
 }

@@ -2,7 +2,7 @@
  * /api/v1/projects/:identifier/property_definitions — a project's
  * property definitions (resource route, JSON).
  *
- * GET  lists `ApiPropertyDefinition[]` in display order.
+ * GET  lists an `ApiPage<ApiPropertyDefinition>` (`?limit=`, `?cursor=`) in display order.
  * POST defines one via DefinePropertyDefinition (project admin, as in
  *      the UI); body `ApiDefinePropertyDefinitionBody`; 201 with the
  *      definition as the list presents it.
@@ -26,12 +26,15 @@ import {
   requiredString,
 } from "~/api/http.server";
 import { propertyDefinitionResources, requireProject } from "~/api/resources.server";
+import { keysetPage, readPageParams } from "~/api/pagination.server";
 
 /** GET: the project's property definitions in display order. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   await requireApiUser(request);
   const project = requireProject(db, params.identifier);
-  return jsonResponse(propertyDefinitionResources(db, project.id));
+  const page = readPageParams(new URL(request.url));
+  const paged = keysetPage(propertyDefinitionResources(db, project.id), page, (row) => [row.position, row.id]);
+  return jsonResponse(paged);
 }
 
 /** Reads the optional `values` list — strings only. */

@@ -11,7 +11,7 @@
  * password remain valid beside LDAP, so a misconfigured directory
  * cannot lock the site's administrators out (a stated departure).
  *
- * Public interface: `CredentialStrategy`, `passwordStrategy`,
+ * Public interface: `authenticateCredentialsDetailed`, `AuthenticatedCredentials`, `CredentialStrategy`, `passwordStrategy`,
  * `ldapStrategy`, `authenticateCredentials`.
  *
  * Owner context: Identity & Access.
@@ -78,11 +78,31 @@ export async function authenticateCredentials(
   strategies: CredentialStrategy[],
   credentials: { login: string; password: string },
 ): Promise<CommandResult<UserRow>> {
+  const detailed = await authenticateCredentialsDetailed(strategies, credentials);
+  return detailed.ok ? { ok: true, value: detailed.value.user } : detailed;
+}
+
+/** What a successful sign-in reports: the user and the strategy that vouched for them. */
+export interface AuthenticatedCredentials {
+  user: UserRow;
+  /** Recorded on the session (ADR-0021 Decision 4). */
+  kind: CredentialStrategy["kind"];
+}
+
+/**
+ * Like `authenticateCredentials`, also reporting which strategy
+ * succeeded — the kind the session records.
+ */
+export async function authenticateCredentialsDetailed(
+  strategies: CredentialStrategy[],
+  credentials: { login: string; password: string },
+): Promise<CommandResult<AuthenticatedCredentials>> {
   let first: CommandResult<UserRow> | undefined;
   for (const strategy of strategies) {
     const result = await strategy.authenticate(credentials);
-    if (result.ok) return result;
+    if (result.ok) return { ok: true, value: { user: result.value, kind: strategy.kind } };
     first ??= result;
   }
-  return first ?? reject("login", "Invalid login or password");
+  if (first && !first.ok) return first;
+  return reject("login", "Invalid login or password");
 }

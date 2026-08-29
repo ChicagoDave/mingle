@@ -7,11 +7,20 @@
  * order — CreateProject, DefineCardType, DefinePropertyDefinition
  * (plain kinds, then formulas, whose inputs must already exist),
  * DefineTree, DefineAggregateProperty, DefineTransition,
- * DefineProjectVariable — on one transaction, so a bundle that fails
+ * DefineProjectVariable — then the version-2 content sections
+ * (ADR-0024 Decision 6): SaveFavorite / MakeFavoriteTab /
+ * SetLaneWipLimit, ImportCards (the seed cards as a pre-built table,
+ * so they take the CSV path's versions), SetCardDefaults, and
+ * CreatePage last, after every configuration section, with
+ * `{{template:today±N}}` tokens expanded to dates first (Decision 5)
+ * — on one transaction, so a bundle that fails
  * any rule leaves nothing behind and the errors name the offending
  * entry. No business logic is duplicated here: every invariant the
  * commands enforce holds for imported configuration exactly as for
- * hand-entered configuration.
+ * hand-entered configuration. `(current user)` resolves to the actor,
+ * who joins the new project's team when a seed card or default names
+ * them (legacy ProjectCreator `add_member(User.current)`), since a
+ * user value must name a member.
  *
  * Commands → events:
  *   ImportProject → ProjectImported (after the events of every command it ran)
@@ -25,11 +34,17 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { cardTypes } from "~/db/schema/cards";
 import { propertyDefinitions } from "~/db/schema/properties";
 import { defineCardType } from "~/domain/cards/commands.server";
+import { isCurrentUserMarker, setCardDefaults } from "~/domain/cards/card-defaults.server";
+import { makeFavoriteTab, saveFavorite, setLaneWipLimit } from "~/domain/cards/favorites.server";
+import { importCards } from "~/domain/import-export/card-import.server";
+import { createPage } from "~/domain/pages/commands.server";
+import { addTeamMember } from "~/domain/identity/membership.server";
+import { teamMemberships } from "~/db/schema/membership";
 import { defineAggregateProperty, definePropertyDefinition } from "~/domain/cards/properties.server";
 import { defineTransition, type TransitionPrerequisiteInput } from "~/domain/cards/transitions.server";
 import type { CommandResult } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
-import type { ProjectBundle } from "~/domain/import-export/bundle.server";
+import { expandTemplateTokens, type ProjectBundle } from "~/domain/import-export/bundle.server";
 import { createProject, defineProjectVariable } from "~/domain/projects/commands.server";
 import { defineTree } from "~/domain/trees/commands.server";
 import type { FieldErrors } from "~/shared/wire-types";
@@ -41,13 +56,26 @@ export interface ImportProjectInput {
   /** Overrides the bundle's source identifier; blank means keep it. */
   identifier?: string | null;
   actorUserId: number;
+  /** The instantiation date the page tokens resolve against; defaults to now. */
+  now?: Date;
 }
 
 /** What an import created. */
 export interface ImportOutcome {
   projectId: number;
   identifier: string;
-  counts: { cardTypes: number; properties: number; trees: number; aggregates: number; transitions: number; variables: number };
+  counts: {
+    cardTypes: number;
+    properties: number;
+    trees: number;
+    aggregates: number;
+    transitions: number;
+    variables: number;
+    favorites: number;
+    cards: number;
+    cardDefaults: number;
+    pages: number;
+  };
 }
 
 /** Carries a command's rejection out of the transaction so it rolls back. */
@@ -80,7 +108,11 @@ function resolve(map: Map<string, number>, name: string, path: string, what: str
  * default "Card" type comes with the project), every plain property
  * in order, every formula, every tree, every aggregate, every
  * transition and every variable through their commands — each
- * appending its own event and rows — and finally appends a
+ * appending its own event and rows — then the content sections in
+ * order: favorites (saved, promoted to tabs, WIP limits set), seed
+ * cards through ImportCards (a create version plus a values version
+ * each, as a CSV row gets), card defaults, and pages with their
+ * template tokens expanded against `now` — and finally appends a
  * ProjectImported event with the counts; all on one transaction.
  * WHEN: the actor may create projects (site administrator) and every
  * entry satisfies the rules of the command that creates it, with every
@@ -215,6 +247,83 @@ export function importProject(db: BetterSQLite3Database, input: ImportProjectInp
         );
       });
 
+      // ── Content (version 2) ──
+      const namesCurrentUser = [...bundle.cards, ...bundle.cardDefaults].some((entry) => Object.values(entry.values).some(isCurrentUserMarker));
+      const alreadyMember = tx
+        .select({ id: teamMemberships.id })
+        .from(teamMemberships)
+        .where(and(eq(teamMemberships.projectId, projectId), eq(teamMemberships.userId, actorUserId)))
+        .get();
+      if (namesCurrentUser && !alreadyMember) must(addTeamMember(tx, { ...scoped, userId: actorUserId }), "project");
+
+      bundle.favorites.forEach((favorite, index) => {
+        const path = `favorites[${index}]`;
+        const row = must(
+          saveFavorite(tx, {
+            ...scoped,
+            name: favorite.name,
+            style: favorite.style,
+            filters: favorite.filters,
+            columns: favorite.columns,
+            groupBy: favorite.groupBy,
+            mql: favorite.mql ?? "",
+            personal: false,
+          }),
+          path,
+        );
+        if (favorite.tabView) must(makeFavoriteTab(tx, { ...scoped, favoriteId: row.id }), path);
+        for (const [lane, limit] of Object.entries(favorite.wipLimits))
+          must(setLaneWipLimit(tx, { ...scoped, favoriteId: row.id, laneValue: lane, limit }), `${path}.wipLimits.${lane}`);
+      });
+
+      if (bundle.cards.length > 0) {
+        // Seed cards become one table for ImportCards: one column per
+        // property any card names, resolved before the import so an
+        // unknown name is an error rather than an ignored column.
+        const kinds = new Map(
+          tx.select({ name: propertyDefinitions.name, kind: propertyDefinitions.kind }).from(propertyDefinitions).where(eq(propertyDefinitions.projectId, projectId)).all()
+            .map((row) => [row.name.toLowerCase(), row.kind]),
+        );
+        const columns = new Map<string, string>();
+        bundle.cards.forEach((card, index) => {
+          for (const property of Object.keys(card.values)) {
+            resolve(propertyIds, property, `cards[${index}].values.${property}`, "property");
+            if (!columns.has(property.toLowerCase())) columns.set(property.toLowerCase(), property);
+          }
+          resolve(typeIds, card.cardType, `cards[${index}].cardType`, "card type");
+        });
+        const propertyColumns = [...columns.entries()];
+        const header = ["Number", "Name", "Description", "Type", ...propertyColumns.map(([, name]) => name)];
+        const rows = bundle.cards.map((card) => [
+          card.number === undefined ? "" : String(card.number),
+          card.name,
+          card.description ?? "",
+          card.cardType,
+          ...propertyColumns.map(([key]) => {
+            const entry = Object.entries(card.values).find(([name]) => name.toLowerCase() === key);
+            if (!entry) return "";
+            return kinds.get(key) === "user" && isCurrentUserMarker(entry[1]) ? String(actorUserId) : entry[1];
+          }),
+        ]);
+        must(importCards(tx, { ...scoped, table: { delimiter: ",", header, rows } }), "cards");
+      }
+
+      bundle.cardDefaults.forEach((entry, index) => {
+        const path = `cardDefaults[${index}]`;
+        must(
+          setCardDefaults(tx, { ...scoped, cardTypeId: resolve(typeIds, entry.cardType, `${path}.cardType`, "card type"), defaults: entry.values }),
+          path,
+        );
+      });
+
+      const now = input.now ?? new Date();
+      bundle.pages.forEach((page, index) => {
+        must(
+          createPage(tx, { ...scoped, name: page.name, content: page.content === null ? null : expandTemplateTokens(page.content, now) }),
+          `pages[${index}]`,
+        );
+      });
+
       const counts = {
         cardTypes: cardTypeCount,
         properties: bundle.properties.length,
@@ -222,6 +331,10 @@ export function importProject(db: BetterSQLite3Database, input: ImportProjectInp
         aggregates: bundle.aggregates.length,
         transitions: bundle.transitions.length,
         variables: bundle.variables.length,
+        favorites: bundle.favorites.length,
+        cards: bundle.cards.length,
+        cardDefaults: bundle.cardDefaults.length,
+        pages: bundle.pages.length,
       };
       emitEvent(tx, {
         type: "ProjectImported",

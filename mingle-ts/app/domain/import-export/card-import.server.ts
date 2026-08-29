@@ -12,6 +12,10 @@
  * will — same lookups, same value validation through
  * `canonicalPropertyValue` — so what it reports is what happens.
  *
+ * The table may also arrive pre-built (`table`) — the project bundle's
+ * seed cards travel this way so they land through the same versioned
+ * path as a CSV (ADR-0024 Decision 6).
+ *
  * Two deliberate departures from legacy: nothing is auto-created (an
  * unknown card type, enumeration value or property is a row error, not
  * a new definition — configuration is entered on the settings page or
@@ -113,7 +117,10 @@ export interface CardImportPreview {
 
 export interface PreviewCardImportInput {
   projectId: number;
-  text: string;
+  /** The delimited text; ignored when `table` is given. */
+  text?: string;
+  /** An already-built table (the project bundle's seed cards, ADR-0024 Decision 6). */
+  table?: DelimitedTable;
   /** One target per header column; absent means suggest from the header. */
   mapping?: ColumnTarget[] | null;
   actorUserId: number;
@@ -298,7 +305,7 @@ function prepare(
 ): CommandResult<{ table: DelimitedTable; mapping: ColumnTarget[]; resolved: ResolvedRow[] }> {
   const denied = authorizeProjectAction(db, input.actorUserId, input.projectId, PrivilegeLevel.FULL_TEAM_MEMBER);
   if (denied) return denied;
-  const table = parseDelimited(input.text);
+  const table = input.table ?? parseDelimited(input.text ?? "");
   if (table.header.length === 0) return reject("text", "has no header row");
   if (table.rows.length === 0) return reject("text", "has no card rows");
   const mapping = input.mapping ?? suggestMappings(db, input.projectId, table.header);

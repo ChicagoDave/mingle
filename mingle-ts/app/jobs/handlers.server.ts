@@ -13,6 +13,10 @@
  * where domain delivery meets environment-configured adapters.
  */
 import { sealer } from "~/auth/sealer.server";
+import { sqlite } from "~/db/client.server";
+import { attachmentsRoot } from "~/files/attachment-storage.server";
+import { BACKUP_JOB, backupKeepFromEnv, backupsDirFromEnv, runBackup } from "~/jobs/backup.server";
+import { recordScheduleOutcome } from "~/jobs/scheduler.server";
 import { deliverSlackNotifications } from "~/domain/integrations/slack.server";
 import { HISTORY_NOTIFICATIONS_JOB, INTEGRATION_DELIVERIES_JOB } from "~/domain/notifications.server";
 import { deliverHistoryNotifications } from "~/domain/subscriptions/notify.server";
@@ -62,5 +66,18 @@ export const jobHandlers: JobHandlers = {
       throw new Error(`integration_deliveries job carries no project id (${JSON.stringify(payload)})`);
     }
     await deliverSlackNotifications(db, sealer, postToSlackWebhook, { projectId, siteUrl: siteUrlFromEnv() });
+  },
+  // ADR-0023: the backup schedule's handler — an ordinary outbox handler that
+  // reports its outcome back to the schedule that enqueued it.
+  [BACKUP_JOB]: async (db, payload) => {
+    const scheduleId = Number(payload.scheduleId);
+    try {
+      await runBackup(sqlite, { backupsDir: backupsDirFromEnv(), attachmentsDir: attachmentsRoot(), keep: backupKeepFromEnv() });
+      if (Number.isSafeInteger(scheduleId)) recordScheduleOutcome(db, scheduleId, { ok: true });
+    } catch (error) {
+      if (Number.isSafeInteger(scheduleId))
+        recordScheduleOutcome(db, scheduleId, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   },
 };

@@ -1,61 +1,10 @@
 /*
- * Favorites, tabs, and saved views — styles harvested from the legacy
- * tabs.scss (#hd-nav, .tab-nav, ul.sortable-tabs li / .current-menu-item),
+ * Favorites and saved views — styles harvested from the legacy
  * sidebar.scss (#favorites-container, a.favorite-link) and the favorites
  * management page (favorites/list.rhtml, _summary_table.rhtml) — Phase 11.
  *
  * Owner context: Card Management (presentation).
  */
-
-/* Project tab bar (legacy layouts/_tabs.rhtml). */
-#hd-nav {
-  margin: 0;
-  padding: 0 16px;
-  background-color: #3c3c3c;
-  position: relative;
-  display: flex;
-  justify-content: space-between;
-}
-#hd-nav .tab-nav {
-  flex-grow: 1;
-}
-#hd-nav ul.sortable-tabs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-}
-#hd-nav ul.sortable-tabs li {
-  margin: 5px 5px 0 0;
-  padding: 0 4px 0 0;
-  font-size: 12px;
-  height: 34px;
-  color: #dddddd;
-}
-#hd-nav ul.sortable-tabs li:hover {
-  background-color: #555555;
-}
-#hd-nav ul.sortable-tabs li a[role="tab-name"] {
-  display: block;
-  max-width: 125px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  height: 34px;
-  box-sizing: border-box;
-  padding: 10px 10px 12px 15px;
-  color: inherit;
-  text-decoration: none;
-}
-#hd-nav ul.sortable-tabs li.current-menu-item {
-  background: white;
-  box-shadow: 0 3px 5px rgba(0, 0, 0, 0.3);
-  color: #333333;
-}
-#hd-nav ul.sortable-tabs li.current-menu-item:hover {
-  background: white;
-}
 
 /* Favorites sidebar section (legacy shared/_favorites.rhtml). */
 #favorites-container {

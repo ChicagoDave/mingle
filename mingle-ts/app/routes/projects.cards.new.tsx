@@ -13,6 +13,8 @@
 import { asc, eq } from "drizzle-orm";
 import { Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.cards.new";
+import { ActionBar, ErrorLines } from "~/components/forms";
+import "../styles/card-new.css";
 import type { FieldErrors } from "~/shared/wire-types";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -62,64 +64,63 @@ export async function action({ request, params }: Route.ActionArgs) {
   throw redirect(`/projects/${params.identifier}/cards/${result.value.number}`);
 }
 
-/** New card form. Styling is deliberately minimal until the UX-harvest phases. */
+/** New card — legacy cards/new.rhtml with cards/_form.rhtml (card top: number and name; description; card type) and _card_create_actions.rhtml. */
 export default function NewCard() {
   const { project, cardTypes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors = actionData?.errors ?? {};
+  const base = `/projects/${project.identifier}/cards`;
 
-  return (
-    <main style={{ maxWidth: 560, margin: "4rem auto", fontFamily: "sans-serif" }}>
-      <h1>New card in {project.name}</h1>
-      <p>
-        <Link to={`/projects/${project.identifier}/cards`}>All cards</Link>
-      </p>
-      <ErrorLines field="authorization" errors={errors} />
-      <Form method="post">
-        <p>
-          <label>
-            Name
-            <br />
-            <input name="name" required />
-          </label>
-          <ErrorLines field="name" errors={errors} />
-        </p>
-        <p>
-          <label>
-            Type
-            <br />
-            <select name="cardTypeId">
-              {cardTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ErrorLines field="cardType" errors={errors} />
-        </p>
-        <p>
-          <label>
-            Description
-            <br />
-            <textarea name="description" rows={6} />
-          </label>
-        </p>
-        <button type="submit">Create card</button>
-      </Form>
-    </main>
+  const actions = (
+    <ActionBar>
+      <button type="submit" className="primary save save-button">
+        Save
+      </button>
+      <Link to={base} id="cancel" className="cancel">
+        Cancel
+      </Link>
+    </ActionBar>
   );
-}
 
-/** Renders a field's error messages, if any. */
-function ErrorLines({ field, errors }: { field: string; errors: FieldErrors }) {
   return (
-    <>
-      {errors[field]?.map((message) => (
-        <span key={message} style={{ color: "crimson", display: "block" }}>
-          {message}
-        </span>
-      ))}
-    </>
+    <Form method="post" id="card-create-form">
+      {actions}
+      <ErrorLines field="authorization" errors={errors} />
+      <div id="edit-contents">
+        <div id="card">
+          <div id="card-top">
+            <h1 id="card-index">New card</h1>
+            <div id="card-edit-title-container">
+              <div id="card-edit-title">
+                <ErrorLines field="name" errors={errors} prefix="Name" />
+                <input id="card_name" name="name" placeholder="Card name" required />
+              </div>
+            </div>
+            <div className="clear_float" />
+          </div>
+          <div id="card-description-container">
+            <ErrorLines field="description" errors={errors} />
+            <textarea id="card_description" name="description" rows={12} placeholder="Description" />
+          </div>
+          <div className="clear-both" />
+          <div id="card-bottom">
+            <div className="card-type-editor">
+              <label htmlFor="card_card_type_id" className="inline">
+                <b>Type:</b>
+              </label>{" "}
+              <select id="card_card_type_id" name="cardTypeId">
+                {cardTypes.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+              <ErrorLines field="cardType" errors={errors} />
+            </div>
+          </div>
+        </div>
+      </div>
+      {actions}
+    </Form>
   );
 }

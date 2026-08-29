@@ -1,12 +1,21 @@
 # Mingle — the one-command install (ADR-0002: one container, one SQLite volume).
 #
-#   docker compose up -d        # builds the image, starts Mingle on
+#   docker compose up -d        # pulls the published image, starts Mingle on
 #                               # http://localhost:3000 (MINGLE_PORT to change),
 #                               # keeps its data in the mingle-data volume
 #
+# The image is ghcr.io/chicagodave/mingle, published by the tag-driven
+# pipeline in .github/workflows/verify-and-publish.yml (ADR-0022). This file
+# pins the minor line, so `docker compose pull && docker compose up -d` picks
+# up patch releases but never a surprise minor; bump the tag below to move
+# to a new minor. `latest` moves across minors and is for trying the
+# product, not for running it. To build from source instead, layer
+# compose.build.yaml on top (see that file).
+#
 # There is no database service: SQLite lives inside the app container at
 # /data/mingle.db on the mounted volume, and pending migrations are applied
-# every time the container starts, so upgrading is `docker compose up -d --build`.
+# every time the container starts, so upgrading is
+# `docker compose pull && docker compose up -d`.
 #
 # Backup = copy the database file out of the volume while the app is running
 # (SQLite in WAL mode stays consistent under a copy):
@@ -20,7 +29,7 @@
 # Development stack with a local mail server: see compose.dev.yaml.
 services:
   app:
-    build: .
+    image: ghcr.io/chicagodave/mingle:1.0
     init: true
     restart: unless-stopped
     environment:

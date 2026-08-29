@@ -38,7 +38,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const claims = await completeOidcSignIn(oidc, oidcCallbackUrl(request), new URL(request.url).searchParams, pending);
     const result = signInExternalUser(db, { claims, autoEnroll: oidc.autoEnroll });
     if (!result.ok) return fail(result.errors.login?.[0] ?? "Sign-in refused");
-    const response = await createUserSession(result.value.id, "/profile");
+    const response = await createUserSession(result.value.id, "/profile", "oidc");
     for (const [name, value] of new Headers(clear)) response.headers.append(name, value);
     return response;
   } catch (error) {

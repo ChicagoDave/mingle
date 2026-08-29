@@ -20,8 +20,17 @@
  *   ConfigureGithubIntegration → GithubIntegrationConfigured
  *   RemoveGithubIntegration    → GithubIntegrationRemoved
  *   ReceiveGithubPush          → GithubPushReceived, CommitLinked (per link)
+ *   ReceiveGithubPullRequest   → GithubPullRequestReceived, PullRequestLinked (per link)
+ *   ReceiveGithubStatus        → GithubStatusReceived, CommitStatusRecorded (per link)
+ *
+ * Since P-12 a registration names its SCM `provider` (github, gitlab,
+ * bitbucket); the GitLab and Bitbucket receivers verify and normalize
+ * their payloads (scm-receivers.server.ts) and share `receiveGithubPush`,
+ * each provider's murmurs authored by its own system user.
  *
  * Public interface: `GITHUB_SYSTEM_LOGIN`, `configureGithubIntegration`,
+ * `parsePullRequestPayload`, `receiveGithubPullRequest`,
+ * `parseStatusPayload`, `receiveGithubStatus`,
  * `removeGithubIntegration`, `verifyGithubSignature`, `parsePushPayload`,
  * `receiveGithubPush`.
  *
@@ -33,7 +42,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { cards } from "~/db/schema/cards";
-import { commitLinks, githubCommits, githubIntegrations, type GithubIntegrationRow } from "~/db/schema/integrations";
+import { commitLinks, githubCommits, githubIntegrations, type GithubIntegrationRow, pullRequestLinks } from "~/db/schema/integrations";
 import { teamMemberships } from "~/db/schema/membership";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
@@ -44,6 +53,8 @@ import type { Sealer } from "~/domain/identity/sealer.server";
 import { ensureSystemUser } from "~/domain/identity/system-users.server";
 import { postMurmur } from "~/domain/murmurs/commands.server";
 import { cardNumbersInText } from "~/domain/text-references.server";
+import { SCM_SYSTEM_USERS } from "~/domain/integrations/scm-receivers.server";
+import { SCM_PROVIDERS, type ScmProvider } from "~/shared/wire-types";
 
 /** The system account that authors commit murmurs (legacy: "github"). */
 export const GITHUB_SYSTEM_LOGIN = "github";
@@ -63,6 +74,8 @@ export interface ConfigureGithubIntegrationInput {
   projectId: number;
   /** "owner/name". */
   repository: string;
+  /** The SCM host; defaults to GitHub. */
+  provider?: ScmProvider;
   actorUserId: number;
 }
 
@@ -99,6 +112,8 @@ export function configureGithubIntegration(
   if (denied) return denied;
   const repository = input.repository.trim().toLowerCase();
   if (!REPOSITORY_FORMAT.test(repository)) return reject("repository", "must be owner/name");
+  const provider: ScmProvider = input.provider ?? "github";
+  if (!(SCM_PROVIDERS as readonly string[]).includes(provider)) return reject("provider", "is not a supported SCM host");
   const taken = db
     .select({ id: githubIntegrations.id })
     .from(githubIntegrations)
@@ -109,7 +124,7 @@ export function configureGithubIntegration(
   const secret = randomBytes(32).toString("base64url");
   try {
     return db.transaction((tx) => {
-    const github = ensureSystemUser(tx, { login: GITHUB_SYSTEM_LOGIN, name: "GitHub", actorUserId: input.actorUserId });
+    const github = ensureSystemUser(tx, { ...SCM_SYSTEM_USERS[provider], actorUserId: input.actorUserId });
     const member = tx
       .select({ id: teamMemberships.id })
       .from(teamMemberships)
@@ -123,14 +138,14 @@ export function configureGithubIntegration(
     }
     const row = tx
       .insert(githubIntegrations)
-      .values({ projectId: input.projectId, repository, secretSealed: sealer.seal(secret), createdByUserId: input.actorUserId })
+      .values({ projectId: input.projectId, provider, repository, secretSealed: sealer.seal(secret), createdByUserId: input.actorUserId })
       .returning()
       .get();
     emitEvent(tx, {
       type: "GithubIntegrationConfigured",
       aggregateType: "Project",
       aggregateId: input.projectId,
-      payload: { repository },
+      payload: { repository, provider },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: { secret, row } } as CommandResult<ConfiguredGithubIntegration>;
@@ -299,7 +314,7 @@ export function receiveGithubPush(db: BetterSQLite3Database, input: ReceiveGithu
   const integration = db.select().from(githubIntegrations).where(eq(githubIntegrations.id, input.integrationId)).get();
   if (!integration || !integration.enabled) return reject("repository", "is not registered for this project");
   return db.transaction((tx) => {
-    const github = ensureSystemUser(tx, { login: GITHUB_SYSTEM_LOGIN, name: "GitHub", actorUserId: integration.createdByUserId });
+    const github = ensureSystemUser(tx, { ...SCM_SYSTEM_USERS[integration.provider as ScmProvider], actorUserId: integration.createdByUserId });
     let linked = 0;
     let murmurCount = 0;
     let skipped = 0;
@@ -363,9 +378,252 @@ export function receiveGithubPush(db: BetterSQLite3Database, input: ReceiveGithu
       type: "GithubPushReceived",
       aggregateType: "Project",
       aggregateId: integration.projectId,
-      payload: { repository: input.payload.repository, commits: input.payload.commits.length, skipped, linked, murmurs: murmurCount },
+      payload: { provider: integration.provider, repository: input.payload.repository, commits: input.payload.commits.length, skipped, linked, murmurs: murmurCount },
       actorUserId: github.id,
     });
     return { ok: true, value: { commits: input.payload.commits.length, skipped, linked, murmurs: murmurCount } } as CommandResult<GithubPushOutcome>;
+  });
+}
+
+// ---------------------------------------------------------- pull requests
+
+/** A pull_request event, reduced to what is used (P-11). */
+export interface PullRequestPayload {
+  /** "owner/name", lowercase. */
+  repository: string;
+  /** GitHub's `action`: opened, closed, reopened, edited, synchronize, ready_for_review, ... */
+  action: string;
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  /** "open", "closed", or "merged". */
+  state: string;
+  authorLogin: string | null;
+}
+
+/**
+ * Reduces a GitHub pull_request-event body to `PullRequestPayload`.
+ *
+ * @returns the payload, or null when the body is not a pull_request
+ *   event (no `pull_request.number`, `action`, or repository)
+ */
+export function parsePullRequestPayload(body: unknown): PullRequestPayload | null {
+  if (typeof body !== "object" || body === null) return null;
+  const raw = body as { action?: unknown; repository?: { full_name?: unknown }; pull_request?: Record<string, unknown> };
+  const fullName = raw.repository?.full_name;
+  const pr = raw.pull_request;
+  if (typeof fullName !== "string" || typeof raw.action !== "string" || !pr || typeof pr.number !== "number") return null;
+  const user = (pr.user ?? {}) as Record<string, unknown>;
+  const merged = pr.merged === true || (typeof pr.merged_at === "string" && pr.merged_at !== "");
+  return {
+    repository: fullName.toLowerCase(),
+    action: raw.action,
+    number: pr.number,
+    title: typeof pr.title === "string" ? pr.title : "",
+    body: typeof pr.body === "string" ? pr.body : "",
+    url: typeof pr.html_url === "string" ? pr.html_url : "",
+    state: merged ? "merged" : pr.state === "closed" ? "closed" : "open",
+    authorLogin: typeof user.login === "string" ? user.login : null,
+  };
+}
+
+export interface ReceiveGithubPullRequestInput {
+  integrationId: number;
+  payload: PullRequestPayload;
+}
+
+export interface GithubPullRequestOutcome {
+  /** pull request→card links written or updated. */
+  linked: number;
+  murmurs: number;
+}
+
+/** The actions worth a murmur; edits and pushes to the branch only refresh the links. */
+const MURMURED_PR_ACTIONS: Record<string, string> = {
+  opened: "opened",
+  reopened: "reopened",
+  ready_for_review: "marked ready for review",
+  closed: "closed",
+};
+
+/**
+ * ReceiveGithubPullRequest — records a verified pull_request event.
+ *
+ * DOES: finds the project's live cards whose numbers the title or body
+ * reference (`#123`) and upserts one `pull_request_links` row per card
+ * (title, url, state and author refreshed on every event; appending
+ * PullRequestLinked when a link is new); for an opened, reopened,
+ * ready-for-review, closed, or merged event posts one murmur as the
+ * provider's system user naming the pull request and its cards; stamps
+ * `last_received_at`; appends GithubPullRequestReceived; all in one
+ * transaction. An event referencing no card writes no link and no
+ * murmur.
+ * REJECTS: unknown or disabled integration.
+ */
+export function receiveGithubPullRequest(db: BetterSQLite3Database, input: ReceiveGithubPullRequestInput): CommandResult<GithubPullRequestOutcome> {
+  const integration = db.select().from(githubIntegrations).where(eq(githubIntegrations.id, input.integrationId)).get();
+  if (!integration || !integration.enabled) return reject("repository", "is not registered for this project");
+  const { payload } = input;
+  return db.transaction((tx) => {
+    const github = ensureSystemUser(tx, { ...SCM_SYSTEM_USERS[integration.provider as ScmProvider], actorUserId: integration.createdByUserId });
+    const numbers = cardNumbersInText(`${payload.title}\n${payload.body}`);
+    const targets =
+      numbers.length === 0
+        ? []
+        : tx
+            .select({ id: cards.id, number: cards.number })
+            .from(cards)
+            .where(and(eq(cards.projectId, integration.projectId), inArray(cards.number, numbers)))
+            .all();
+    let linked = 0;
+    for (const card of targets) {
+      const existing = tx
+        .select({ id: pullRequestLinks.id })
+        .from(pullRequestLinks)
+        .where(and(eq(pullRequestLinks.githubIntegrationId, integration.id), eq(pullRequestLinks.number, payload.number), eq(pullRequestLinks.cardId, card.id)))
+        .get();
+      const values = { title: payload.title, url: payload.url, state: payload.state, authorLogin: payload.authorLogin, updatedAt: new Date() };
+      if (existing) {
+        tx.update(pullRequestLinks).set(values).where(eq(pullRequestLinks.id, existing.id)).run();
+      } else {
+        tx.insert(pullRequestLinks)
+          .values({ projectId: integration.projectId, cardId: card.id, githubIntegrationId: integration.id, repository: payload.repository, number: payload.number, ...values })
+          .run();
+        emitEvent(tx, {
+          type: "PullRequestLinked",
+          aggregateType: "Card",
+          aggregateId: card.id,
+          payload: { cardNumber: card.number, repository: payload.repository, number: payload.number },
+          actorUserId: github.id,
+        });
+      }
+      linked += 1;
+    }
+    let murmurs = 0;
+    const verb = payload.action === "closed" && payload.state === "merged" ? "merged" : MURMURED_PR_ACTIONS[payload.action];
+    if (verb && targets.length > 0) {
+      const by = payload.authorLogin ? ` by ${payload.authorLogin}` : "";
+      const body = [
+        `Pull request [#${payload.number} ${payload.title}](${payload.url}) ${verb}${by} (${payload.repository})`,
+        `Cards: ${targets.map((card) => `#${card.number}`).join(", ")}`,
+      ].join("\n");
+      if (postMurmur(tx, { projectId: integration.projectId, body, actorUserId: github.id }).ok) murmurs += 1;
+    }
+    tx.update(githubIntegrations).set({ lastReceivedAt: new Date() }).where(eq(githubIntegrations.id, integration.id)).run();
+    emitEvent(tx, {
+      type: "GithubPullRequestReceived",
+      aggregateType: "Project",
+      aggregateId: integration.projectId,
+      payload: { repository: payload.repository, number: payload.number, action: payload.action, state: payload.state, linked, murmurs },
+      actorUserId: github.id,
+    });
+    return { ok: true, value: { linked, murmurs } } as CommandResult<GithubPullRequestOutcome>;
+  });
+}
+
+// ---------------------------------------------------------------- statuses
+
+/** A status event, reduced to what is used (P-11). */
+export interface StatusPayload {
+  /** "owner/name", lowercase. */
+  repository: string;
+  sha: string;
+  /** "success", "failure", "error", or "pending". */
+  state: string;
+  context: string;
+  description: string;
+  targetUrl: string | null;
+}
+
+/**
+ * Reduces a GitHub status-event body to `StatusPayload`.
+ *
+ * @returns the payload, or null when the body is not a status event
+ *   (no `sha`, `state`, or repository)
+ */
+export function parseStatusPayload(body: unknown): StatusPayload | null {
+  if (typeof body !== "object" || body === null) return null;
+  const raw = body as Record<string, unknown> & { repository?: { full_name?: unknown } };
+  const fullName = raw.repository?.full_name;
+  if (typeof fullName !== "string" || typeof raw.sha !== "string" || typeof raw.state !== "string") return null;
+  return {
+    repository: fullName.toLowerCase(),
+    sha: raw.sha,
+    state: raw.state,
+    context: typeof raw.context === "string" ? raw.context : "default",
+    description: typeof raw.description === "string" ? raw.description : "",
+    targetUrl: typeof raw.target_url === "string" && raw.target_url ? raw.target_url : null,
+  };
+}
+
+export interface ReceiveGithubStatusInput {
+  integrationId: number;
+  payload: StatusPayload;
+}
+
+export interface GithubStatusOutcome {
+  /** commit→card links the status was recorded on. */
+  updated: number;
+  murmurs: number;
+}
+
+/**
+ * ReceiveGithubStatus — records a verified commit status.
+ *
+ * DOES: for every `commit_links` row of this integration with the
+ * payload's SHA, sets the status columns (state, context, description,
+ * URL, now) and appends CommitStatusRecorded; for a non-pending state
+ * with at least one link posts one murmur as the provider's system
+ * user naming the commit, the state, and the cards; stamps
+ * `last_received_at`; appends GithubStatusReceived; all in one
+ * transaction. A status for an unlinked commit records nothing but the
+ * receipt.
+ * REJECTS: unknown or disabled integration.
+ */
+export function receiveGithubStatus(db: BetterSQLite3Database, input: ReceiveGithubStatusInput): CommandResult<GithubStatusOutcome> {
+  const integration = db.select().from(githubIntegrations).where(eq(githubIntegrations.id, input.integrationId)).get();
+  if (!integration || !integration.enabled) return reject("repository", "is not registered for this project");
+  const { payload } = input;
+  return db.transaction((tx) => {
+    const github = ensureSystemUser(tx, { ...SCM_SYSTEM_USERS[integration.provider as ScmProvider], actorUserId: integration.createdByUserId });
+    const links = tx
+      .select({ id: commitLinks.id, cardId: commitLinks.cardId, cardNumber: cards.number })
+      .from(commitLinks)
+      .innerJoin(cards, eq(cards.id, commitLinks.cardId))
+      .where(and(eq(commitLinks.githubIntegrationId, integration.id), eq(commitLinks.sha, payload.sha)))
+      .all();
+    const now = new Date();
+    for (const link of links) {
+      tx.update(commitLinks)
+        .set({ statusState: payload.state, statusContext: payload.context, statusDescription: payload.description, statusUrl: payload.targetUrl, statusAt: now })
+        .where(eq(commitLinks.id, link.id))
+        .run();
+      emitEvent(tx, {
+        type: "CommitStatusRecorded",
+        aggregateType: "Card",
+        aggregateId: link.cardId,
+        payload: { cardNumber: link.cardNumber, sha: payload.sha, state: payload.state, context: payload.context },
+        actorUserId: github.id,
+      });
+    }
+    let murmurs = 0;
+    if (links.length > 0 && payload.state !== "pending") {
+      const target = payload.targetUrl ? ` ([details](${payload.targetUrl}))` : "";
+      const body = [
+        `Status *${payload.state}* for commit #rev-${payload.sha.slice(0, 11)} — ${payload.context}${payload.description ? `: ${payload.description}` : ""}${target} (${payload.repository})`,
+        `Cards: ${links.map((link) => `#${link.cardNumber}`).join(", ")}`,
+      ].join("\n");
+      if (postMurmur(tx, { projectId: integration.projectId, body, actorUserId: github.id }).ok) murmurs += 1;
+    }
+    tx.update(githubIntegrations).set({ lastReceivedAt: new Date() }).where(eq(githubIntegrations.id, integration.id)).run();
+    emitEvent(tx, {
+      type: "GithubStatusReceived",
+      aggregateType: "Project",
+      aggregateId: integration.projectId,
+      payload: { repository: payload.repository, sha: payload.sha, state: payload.state, context: payload.context, updated: links.length, murmurs },
+      actorUserId: github.id,
+    });
+    return { ok: true, value: { updated: links.length, murmurs } } as CommandResult<GithubStatusOutcome>;
   });
 }

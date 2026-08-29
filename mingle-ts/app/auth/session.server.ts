@@ -6,7 +6,7 @@
  * it lives here and not in the Identity domain module.
  *
  * Public interface: `createUserSession`, `getUserId`, `requireUserId`,
- * `destroySessionHeaders`.
+ * `getSessionPrincipal`, `destroySessionHeaders`.
  *
  * Owner context: infrastructure (HTTP session adapter) for Identity &
  * Access.
@@ -17,6 +17,8 @@
  */
 import { createCookieSessionStorage, redirect } from "react-router";
 import { appSecret } from "~/auth/secret.server";
+import type { RequestPrincipal } from "~/domain/identity/principal.server";
+import { STRATEGY_KINDS, type StrategyKind } from "~/shared/wire-types";
 
 const storage = createCookieSessionStorage({
   cookie: {
@@ -32,15 +34,19 @@ const storage = createCookieSessionStorage({
 });
 
 /**
- * Logs a browser in: stores the user id in a fresh session cookie and
- * redirects.
+ * Logs a browser in: stores the user id and the strategy kind that
+ * authenticated them (ADR-0021 Decision 4) in a fresh session cookie
+ * and redirects. A session created without a kind satisfies no
+ * project constraint.
  */
 export async function createUserSession(
   userId: number,
   redirectTo: string,
+  strategyKind: StrategyKind | null = null,
 ): Promise<Response> {
   const session = await storage.getSession();
   session.set("userId", userId);
+  if (strategyKind) session.set("strategyKind", strategyKind);
   return redirect(redirectTo, {
     headers: { "Set-Cookie": await storage.commitSession(session) },
   });
@@ -51,6 +57,20 @@ export async function getUserId(request: Request): Promise<number | null> {
   const session = await storage.getSession(request.headers.get("Cookie"));
   const userId = session.get("userId");
   return typeof userId === "number" ? userId : null;
+}
+
+/**
+ * The request principal a session cookie carries: the user and the
+ * strategy kind that opened the session (null for a cookie issued
+ * before kinds were recorded), or anonymous.
+ */
+export async function getSessionPrincipal(request: Request): Promise<RequestPrincipal> {
+  const session = await storage.getSession(request.headers.get("Cookie"));
+  const userId = session.get("userId");
+  if (typeof userId !== "number") return { via: "anonymous" };
+  const kind = session.get("strategyKind");
+  const strategyKind = (STRATEGY_KINDS as readonly string[]).includes(String(kind)) ? (kind as StrategyKind) : null;
+  return { via: "session", userId, strategyKind };
 }
 
 /**

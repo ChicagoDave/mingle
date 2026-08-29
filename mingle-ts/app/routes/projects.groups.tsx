@@ -14,8 +14,9 @@
  * Owner context: Identity & Access (HTTP adapter).
  */
 import { eq, inArray, sql } from "drizzle-orm";
-import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.groups";
+import { ErrorLines, FlashBox, AdminPage } from "~/components/forms";
 import type { FieldErrors } from "~/shared/wire-types";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -126,101 +127,138 @@ export async function action({ request, params }: Route.ActionArgs) {
   throw new Response("Unknown intent", { status: 400 });
 }
 
-/** Groups page. Styling is deliberately minimal until the UX-harvest phases. */
+/** Groups page — legacy groups/index.rhtml (quick-add box, groups table) with each group's members per groups/show.rhtml, beside the admin nav. */
 export default function ProjectGroups() {
   const { project, groups, teamMembers } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
   const saved = actionData && "saved" in actionData ? actionData.saved : null;
+  const savedMessage =
+    saved === "create"
+      ? "Group was successfully created."
+      : saved === "delete"
+        ? "Group was successfully deleted."
+        : saved === "add-member"
+          ? "Member was successfully added to the group."
+          : saved === "remove-member"
+            ? "Member was successfully removed from the group."
+            : null;
 
   return (
-    <main style={{ maxWidth: 640, margin: "4rem auto", fontFamily: "sans-serif" }}>
-      <h1>
-        {project.name} groups <small>({project.identifier})</small>
-      </h1>
-      <p>
-        <Link to="/projects">All projects</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/team`}>Team</Link>
-      </p>
-      {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
+    <AdminPage identifier={project.identifier} current="groups">
+      <div>
+        <h1>{project.name} user groups</h1>
+      </div>
+      {savedMessage ? <FlashBox kind="success">{savedMessage}</FlashBox> : null}
       <ErrorLines field="authorization" errors={errors} />
       <ErrorLines field="group" errors={errors} />
       <ErrorLines field="user" errors={errors} />
-
-      {groups.length === 0 ? (
-        <p>No groups defined.</p>
-      ) : (
-        groups.map((group) => (
-          <section key={group.id}>
-            <h2>{group.name}</h2>
-            {group.members.length === 0 ? (
-              <p>No members.</p>
+      <div className="basic-panel-one quick-add-group">
+        <Form method="post">
+          <input type="hidden" name="intent" value="create" />
+          <ErrorLines field="name" errors={errors} prefix="Name" />
+          <input id="group_name" name="name" className="quick-add-text-field" placeholder="New group name" />
+          <button type="submit" id="submit-quick-add" className="quick-add-add-btn primary">
+            Create
+          </button>
+        </Form>
+      </div>
+      <div id="content" className="content-margin-adjust">
+        <table id="project_groups" className="highlightable-table">
+          <thead>
+            <tr className="table-top">
+              <th>Group name</th>
+              <th>Number of users</th>
+              <th className="align-right last">&nbsp;</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="italic-light align-center last">
+                  There are currently no groups to list.
+                </td>
+              </tr>
             ) : (
-              <ul>
-                {group.members.map((member) => (
-                  <li key={member.userId}>
-                    {member.name}{" "}
-                    <Form method="post" style={{ display: "inline" }}>
-                      <input type="hidden" name="intent" value="remove-member" />
+              groups.map((group, index) => (
+                <tr key={group.id} className={`group ${index % 2 === 0 ? "odd" : "even"}`}>
+                  <td className="name">
+                    <span id={`group_${group.id}_name`}>
+                      <a href={`#group-${group.id}`}>{group.name}</a>
+                    </span>
+                  </td>
+                  <td className="numberofusers">{group.members.length}</td>
+                  <td className="action align-right last inline-forms">
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="delete" />
                       <input type="hidden" name="groupId" value={group.id} />
-                      <input type="hidden" name="userId" value={member.userId} />
-                      <button type="submit">Remove</button>
+                      <button type="submit" id={`delete_group_${group.id}`} className="inline delete inline-delete-link">
+                        Delete
+                      </button>
                     </Form>
-                  </li>
-                ))}
-              </ul>
+                  </td>
+                </tr>
+              ))
             )}
-            {teamMembers.length > 0 ? (
-              <Form method="post">
-                <input type="hidden" name="intent" value="add-member" />
-                <input type="hidden" name="groupId" value={group.id} />
-                <select name="userId">
-                  {teamMembers.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>{" "}
-                <button type="submit">Add to group</button>
-              </Form>
-            ) : null}
-            <Form method="post">
-              <input type="hidden" name="intent" value="delete" />
+          </tbody>
+        </table>
+      </div>
+
+      {groups.map((group) => (
+        <div key={group.id} id={`group-${group.id}`} className="group-members-section">
+          <h2>{group.name}</h2>
+          <table id={`group-members-${group.id}`} className="highlightable-table">
+            <thead>
+              <tr className="table-top">
+                <th>Display name</th>
+                <th className="align-right last">&nbsp;</th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.members.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="italic-light align-center last">
+                    There are currently no members to list.
+                  </td>
+                </tr>
+              ) : (
+                group.members.map((member, index) => (
+                  <tr key={member.userId} className={index % 2 === 0 ? "odd" : "even"}>
+                    <td>{member.name}</td>
+                    <td className="align-right last inline-forms">
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="remove-member" />
+                        <input type="hidden" name="groupId" value={group.id} />
+                        <input type="hidden" name="userId" value={member.userId} />
+                        <button type="submit" className="inline delete">
+                          Remove
+                        </button>
+                      </Form>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+          {teamMembers.length > 0 ? (
+            <Form method="post" className="add-to-group">
+              <input type="hidden" name="intent" value="add-member" />
               <input type="hidden" name="groupId" value={group.id} />
-              <button type="submit">Delete group</button>
+              <select name="userId">
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>{" "}
+              <button type="submit" className="primary inline">
+                Add user as member
+              </button>
             </Form>
-          </section>
-        ))
-      )}
-
-      <h2>New group</h2>
-      <Form method="post">
-        <input type="hidden" name="intent" value="create" />
-        <p>
-          <label>
-            Name
-            <br />
-            <input name="name" />
-          </label>
-          <ErrorLines field="name" errors={errors} />
-        </p>
-        <button type="submit">Create group</button>
-      </Form>
-    </main>
-  );
-}
-
-/** Renders a field's error messages, if any. */
-function ErrorLines({ field, errors }: { field: string; errors: FieldErrors }) {
-  return (
-    <>
-      {errors[field]?.map((message) => (
-        <span key={message} style={{ color: "crimson", display: "block" }}>
-          {message}
-        </span>
+          ) : null}
+        </div>
       ))}
-    </>
+    </AdminPage>
   );
 }

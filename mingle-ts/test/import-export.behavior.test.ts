@@ -277,7 +277,7 @@ describe("importProject", () => {
     expect(outcome).toEqual({
       projectId: expect.any(Number),
       identifier: "imported",
-      counts: { cardTypes: 2, properties: 6, trees: 1, aggregates: 2, transitions: 2, variables: 2 },
+      counts: { cardTypes: 2, properties: 6, trees: 1, aggregates: 2, transitions: 2, variables: 2, favorites: 0, cards: 0, cardDefaults: 0, pages: 0 },
     });
     const imported = projectByIdentifier("imported")!;
     expect(imported).toMatchObject({ name: "Imported Project", description: "the original", createdByUserId: adminId });

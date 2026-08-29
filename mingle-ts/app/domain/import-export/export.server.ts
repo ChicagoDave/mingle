@@ -4,21 +4,29 @@
  *
  * Purpose: renders a project's configuration as a `ProjectBundle` —
  * card types, properties, trees, aggregates, transitions and
- * variables, every cross-reference resolved to a name. A read with an
- * authorization gate, not a command: it changes nothing and emits no
- * event (legacy raised an export-progress request; here the document
- * is built synchronously).
+ * variables, every cross-reference resolved to a name — and, only when
+ * asked (`includeContent`, ADR-0024 Decision 3), its content: card
+ * defaults, team favorites with tabs and WIP limits, cards with their
+ * settable values, and pages. Identity never travels: a user default
+ * other than `(current user)`, a card's user values, and WIP limits on
+ * user lanes are dropped. A read with an authorization gate, not a
+ * command: it changes nothing and emits no event (legacy raised an
+ * export-progress request; here the document is built synchronously).
  *
  * Public interface: `exportProject`.
  *
  * Owner context: Import/Export (depends inward on Card Management,
  * Card Trees and Projects for their tables and read models).
  */
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { cardTypes } from "~/db/schema/cards";
+import { cardDefaults } from "~/db/schema/card-defaults";
+import { cards, cardTypes } from "~/db/schema/cards";
+import { favorites } from "~/db/schema/favorites";
+import { pages } from "~/db/schema/pages";
 import { projects, projectVariables } from "~/db/schema/projects";
-import { enumerationValues, propertyDefinitions } from "~/db/schema/properties";
+import { cardPropertyValues, enumerationValues, propertyDefinitions, type PropertyDefinitionRow } from "~/db/schema/properties";
+import { favoriteViewParams, wipLimitsOf } from "~/domain/cards/favorites.server";
 import { treeCardTypes, treeConfigurations } from "~/db/schema/trees";
 import { loadTransitions } from "~/domain/cards/transitions.server";
 import { type CommandResult, reject } from "~/domain/command.server";
@@ -27,19 +35,104 @@ import {
   BUNDLE_FORMAT,
   BUNDLE_VERSION,
   type BundleAggregate,
+  type BundleCard,
+  type BundleCardDefaults,
+  type BundleFavorite,
+  type BundlePage,
   type BundlePrerequisite,
   type BundleProperty,
   type BundlePropertyKind,
   type BundleTree,
   type ProjectBundle,
 } from "~/domain/import-export/bundle.server";
-import type { AGGREGATE_TYPES, ProjectVariableDataType, TransitionActionInputMode } from "~/shared/wire-types";
+import {
+  CURRENT_USER_MARKER,
+  type AGGREGATE_TYPES,
+  type CardViewStyle,
+  type ProjectVariableDataType,
+  type TransitionActionInputMode,
+} from "~/shared/wire-types";
 
 export interface ExportProjectInput {
   projectId: number;
   actorUserId: number;
   /** Injectable clock for the `exportedAt` stamp. */
   now?: Date;
+  /** Also emit card defaults, favorites, cards and pages (default false — configuration only). */
+  includeContent?: boolean;
+}
+
+/** Property kinds whose card values travel: directly settable and identity-free. */
+const PORTABLE_VALUE_KINDS: ReadonlySet<string> = new Set(["text", "number", "date", "enumerated"]);
+
+/** The content sections of a project (ADR-0024 Decision 3 — only on request). */
+function contentSections(
+  db: BetterSQLite3Database,
+  projectId: number,
+  typeName: Map<number, string>,
+  definitions: PropertyDefinitionRow[],
+): Pick<ProjectBundle, "cardDefaults" | "favorites" | "cards" | "pages"> {
+  const definitionById = new Map(definitions.map((d) => [d.id, d]));
+  const definitionByName = new Map(definitions.map((d) => [d.name.toLowerCase(), d]));
+
+  const defaultsByType = new Map<number, Record<string, string>>();
+  for (const row of db.select().from(cardDefaults).where(eq(cardDefaults.projectId, projectId)).orderBy(asc(cardDefaults.id)).all()) {
+    const definition = definitionById.get(row.propertyDefinitionId);
+    if (!definition) continue;
+    if (definition.kind === "user" && row.value !== CURRENT_USER_MARKER) continue;
+    const values = defaultsByType.get(row.cardTypeId) ?? {};
+    values[definition.name] = row.value;
+    defaultsByType.set(row.cardTypeId, values);
+  }
+  const bundledDefaults: BundleCardDefaults[] = [...typeName.entries()]
+    .filter(([id]) => defaultsByType.has(id))
+    .map(([id, name]) => ({ cardType: name, values: defaultsByType.get(id)! }));
+
+  const bundledFavorites: BundleFavorite[] = db
+    .select()
+    .from(favorites)
+    .where(and(eq(favorites.projectId, projectId), isNull(favorites.userId), eq(favorites.kind, "card_view")))
+    .orderBy(asc(favorites.name))
+    .all()
+    .map((row) => {
+      const params = favoriteViewParams(row);
+      const laneKind = definitionByName.get(params.groupBy.toLowerCase())?.kind;
+      const favorite: BundleFavorite = {
+        name: row.name,
+        style: params.style as CardViewStyle,
+        filters: params.filters,
+        columns: params.columns,
+        groupBy: params.groupBy,
+        tabView: row.tabView,
+        wipLimits: laneKind === "user" ? {} : wipLimitsOf(row),
+      };
+      if (params.mql) favorite.mql = params.mql;
+      return favorite;
+    });
+
+  const cardRows = db.select().from(cards).where(eq(cards.projectId, projectId)).orderBy(asc(cards.number)).all();
+  const valueRows = cardRows.length
+    ? db.select().from(cardPropertyValues).where(inArray(cardPropertyValues.cardId, cardRows.map((c) => c.id))).orderBy(asc(cardPropertyValues.id)).all()
+    : [];
+  const bundledCards: BundleCard[] = cardRows.map((card) => {
+    const values: Record<string, string> = {};
+    for (const value of valueRows.filter((v) => v.cardId === card.id)) {
+      const definition = definitionById.get(value.propertyDefinitionId);
+      if (definition && PORTABLE_VALUE_KINDS.has(definition.kind)) values[definition.name] = value.value;
+    }
+    const bundled: BundleCard = { name: card.name, cardType: typeName.get(card.cardTypeId) ?? "", number: card.number, values };
+    if (card.description !== null) bundled.description = card.description;
+    return bundled;
+  });
+
+  const bundledPages: BundlePage[] = db
+    .select({ name: pages.name, content: pages.content })
+    .from(pages)
+    .where(eq(pages.projectId, projectId))
+    .orderBy(asc(pages.name))
+    .all();
+
+  return { cardDefaults: bundledDefaults, favorites: bundledFavorites, cards: bundledCards, pages: bundledPages };
 }
 
 /** Variable data types whose values name an installation-local row and so do not travel. */
@@ -182,6 +275,9 @@ export function exportProject(db: BetterSQLite3Database, input: ExportProjectInp
       aggregates,
       transitions,
       variables,
+      ...(input.includeContent
+        ? contentSections(db, project.id, typeName, definitions)
+        : { cardDefaults: [], favorites: [], cards: [], pages: [] }),
     },
   };
 }

@@ -299,6 +299,7 @@ describe("createCard (CreateCard → CardCreated + version 1)", () => {
       number: 1,
       name: "Story One",
       cardTypeName: "Card",
+      defaultedProperties: [], // the "Card" type carries no defaults (P-2)
     });
   });
 

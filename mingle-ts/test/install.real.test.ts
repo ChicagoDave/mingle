@@ -2,8 +2,9 @@
  * Real-path test for the one-command install (Phase 33 acceptance gate,
  * rule 13a — this phase is docker/deploy-shaped, so nothing is stubbed).
  *
- * Purpose: proves that `docker compose up` from this checkout builds
- * the production image, boots it healthy on its SQLite volume with the
+ * Purpose: proves that `docker compose up` from this checkout, with the
+ * compose.build.yaml override (ADR-0022 Decision 4 — the build-from-source
+ * path), builds the production image, boots it healthy on its SQLite volume with the
  * migrations applied, and that a person (or script) at the other end
  * of plain HTTP can register, create a project, define a property and
  * a transition, create and edit a card, execute the transition, and
@@ -26,7 +27,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ApiCard, ApiCardWrite, ApiProject, ApiPropertyDefinition, ApiTransition, ApiTransitionExecution } from "../app/shared/wire-types";
+import type { ApiCard, ApiCardWrite, ApiPage, ApiProject, ApiPropertyDefinition, ApiTransition, ApiTransitionExecution } from "../app/shared/wire-types";
 
 const projectName = `mingle-install-${randomBytes(3).toString("hex")}`;
 let port = 0;
@@ -35,7 +36,7 @@ let output = "";
 
 /** Runs docker compose for this test's isolated project. */
 function compose(args: string[], options: { timeoutMs?: number; env?: Record<string, string> } = {}): string {
-  const result = execFileSync("docker", ["compose", "-p", projectName, "-f", "compose.yaml", ...args], {
+  const result = execFileSync("docker", ["compose", "-p", projectName, "-f", "compose.yaml", "-f", "compose.build.yaml", ...args], {
     cwd: resolve("."),
     env: { ...process.env, MINGLE_PORT: String(port), SITE_URL: baseUrl, ...(options.env ?? {}) },
     stdio: ["ignore", "pipe", "pipe"],
@@ -175,8 +176,9 @@ describe("docker compose up from this checkout", () => {
     expect(status.status).toBe(201);
     const defined = await postForm("/projects/smoke/transitions", { intent: "create", name: "Open it", usedBy: "all", [`requires[${status.body.id}]`]: "New", [`sets[${status.body.id}]`]: "Open" }, "follow");
     expect(defined.status).toBe(200);
-    const transitions = await api<ApiTransition[]>("GET", "/api/v1/projects/smoke/transitions");
-    expect(transitions.body.map((t) => t.name)).toEqual(["Open it"]);
+    const transitions = await api<ApiPage<ApiTransition>>("GET", "/api/v1/projects/smoke/transitions");
+    expect(transitions.body.items.map((t) => t.name)).toEqual(["Open it"]);
+    expect(transitions.body.nextCursor).toBeNull();
 
     // 5. Card: created, edited, transitioned.
     const created = await api<ApiCardWrite>("POST", "/api/v1/projects/smoke/cards", { name: "Smoke card", properties: { Status: "New" } });

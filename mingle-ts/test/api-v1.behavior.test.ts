@@ -19,21 +19,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, asc, eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import type {
+  ApiAttachment,
   ApiAvailableTransition,
   ApiCard,
   ApiCardType,
   ApiCardWrite,
   ApiErrorBody,
+  ApiMurmur,
+  ApiPage,
   ApiProject,
   ApiPropertyDefinition,
   ApiTransition,
   ApiTransitionExecution,
+  ApiWikiPage,
 } from "../app/shared/wire-types";
 
 const dir = mkdtempSync(join(tmpdir(), "mingle-api-v1-"));
 process.env.DATABASE_FILE = join(dir, "test.db");
 process.env.SESSION_SECRET = "api-v1-suite-secret";
+process.env.ATTACHMENTS_DIR = join(dir, "attachments");
 
 const { db, sqlite } = await import("../app/db/client.server");
 const { createUserSession } = await import("../app/auth/session.server");
@@ -46,6 +52,14 @@ const transitionsRoute = await import("../app/routes/api.v1.projects.transitions
 const cardsRoute = await import("../app/routes/api.v1.projects.cards");
 const cardRoute = await import("../app/routes/api.v1.projects.cards.card");
 const cardTransitionsRoute = await import("../app/routes/api.v1.projects.cards.card.transitions");
+const cardTypeRoute = await import("../app/routes/api.v1.projects.card-types.card-type");
+const transitionRoute = await import("../app/routes/api.v1.projects.transitions.transition");
+const pagesRoute = await import("../app/routes/api.v1.projects.pages");
+const pageRoute = await import("../app/routes/api.v1.projects.pages.page");
+const murmursRoute = await import("../app/routes/api.v1.projects.murmurs");
+const murmurRoute = await import("../app/routes/api.v1.projects.murmurs.murmur");
+const attachmentsRoute = await import("../app/routes/api.v1.projects.cards.card.attachments");
+const attachmentRoute = await import("../app/routes/api.v1.projects.cards.card.attachments.attachment");
 
 const { projects } = await import("../app/db/schema/projects");
 const { apiKeys, users } = await import("../app/db/schema/identity");
@@ -53,6 +67,9 @@ const { teamMemberships } = await import("../app/db/schema/membership");
 const { cards, cardTypes, cardVersions } = await import("../app/db/schema/cards");
 const { cardPropertyValues, enumerationValues, propertyDefinitions } = await import("../app/db/schema/properties");
 const { transitionActions, transitionPrerequisites, transitions } = await import("../app/db/schema/transitions");
+const { pages, pageVersions } = await import("../app/db/schema/pages");
+const { cardMurmurLinks, murmurMentions, murmurs } = await import("../app/db/schema/murmurs");
+const { attachments } = await import("../app/db/schema/card-content");
 const { domainEvents } = await import("../app/db/schema/events");
 const { jobs } = await import("../app/db/schema/jobs");
 const { registerUser } = await import("../app/domain/identity/commands.server");
@@ -62,6 +79,9 @@ const { createProject } = await import("../app/domain/projects/commands.server")
 const { createCard } = await import("../app/domain/cards/commands.server");
 const { definePropertyDefinition, setCardPropertyValue } = await import("../app/domain/cards/properties.server");
 const { defineTransition } = await import("../app/domain/cards/transitions.server");
+const { defineCardType } = await import("../app/domain/cards/commands.server");
+const { createPage } = await import("../app/domain/pages/commands.server");
+const { postMurmur } = await import("../app/domain/murmurs/commands.server");
 
 type CommandResult<T> = { ok: true; value: T } | { ok: false; errors: Record<string, string[]> };
 
@@ -100,7 +120,8 @@ function keyFor(userId: number): string {
 
 beforeEach(() => {
   for (const table of [
-    jobs, domainEvents, transitionActions, transitionPrerequisites, transitions, cardPropertyValues,
+    jobs, domainEvents, attachments, cardMurmurLinks, murmurMentions, murmurs, pageVersions, pages,
+    transitionActions, transitionPrerequisites, transitions, cardPropertyValues,
     enumerationValues, propertyDefinitions, cardVersions, cards, cardTypes, teamMemberships, projects, apiKeys, users,
   ]) db.delete(table).run();
   adminId = register("admin");
@@ -238,11 +259,12 @@ describe("bearer-key authentication", () => {
 describe("/api/v1/projects", () => {
   it("GET lists every project for any authenticated user", async () => {
     mustOk(createProject(db, { name: "Another", identifier: "another", actorUserId: adminId }), "another");
-    const outcome = await call<ApiProject[]>(projectsRoute.loader, { path: "/api/v1/projects", key: viewerKey });
+    const outcome = await call<ApiPage<ApiProject>>(projectsRoute.loader, { path: "/api/v1/projects", key: viewerKey });
     expect(outcome.status).toBe(200);
     expect(outcome.headers.get("Content-Type")).toContain("application/json");
-    expect(outcome.body.map((p) => p.identifier)).toEqual(["another", identifier]);
-    expect(outcome.body[1]).toMatchObject({ name: "API Project", description: null });
+    expect(outcome.body.items.map((p) => p.identifier)).toEqual(["another", identifier]);
+    expect(outcome.body.items[1]).toMatchObject({ name: "API Project", description: null });
+    expect(outcome.body.nextCursor).toBeNull();
   });
 
   it("POST creates a project through CreateProject for a site admin — 201, row and default card type persisted", async () => {
@@ -305,19 +327,19 @@ describe("/api/v1/projects", () => {
 
 describe("project sub-resources", () => {
   it("GET card_types lists the project's types in order", async () => {
-    const outcome = await call<ApiCardType[]>(cardTypesRoute.loader, { path: `${base}/card_types`, key: viewerKey });
+    const outcome = await call<ApiPage<ApiCardType>>(cardTypesRoute.loader, { path: `${base}/card_types`, key: viewerKey });
     expect(outcome.status).toBe(200);
-    expect(outcome.body.map((t) => t.name)).toEqual(["Card"]);
+    expect(outcome.body.items.map((t) => t.name)).toEqual(["Card"]);
   });
 
   it("GET property_definitions presents kinds, enumerated values in order, and the transition-only flag", async () => {
-    const outcome = await call<ApiPropertyDefinition[]>(definitionsRoute.loader, { path: `${base}/property_definitions`, key: viewerKey });
+    const outcome = await call<ApiPage<ApiPropertyDefinition>>(definitionsRoute.loader, { path: `${base}/property_definitions`, key: viewerKey });
     expect(outcome.status).toBe(200);
-    expect(outcome.body.map((d) => [d.name, d.kind, d.transitionOnly])).toEqual([
+    expect(outcome.body.items.map((d) => [d.name, d.kind, d.transitionOnly])).toEqual([
       ["Status", "enumerated", false], ["Owner", "user", false], ["Estimate", "number", false], ["Stage", "enumerated", true],
     ]);
-    expect(outcome.body[0].values).toEqual(["New", "Open", "Closed"]);
-    expect(outcome.body[1].values).toBeUndefined();
+    expect(outcome.body.items[0].values).toEqual(["New", "Open", "Closed"]);
+    expect(outcome.body.items[1].values).toBeUndefined();
   });
 
   it("POST property_definitions defines one through DefinePropertyDefinition — 201 and persisted; 403 below project admin", async () => {
@@ -343,9 +365,10 @@ describe("project sub-resources", () => {
   });
 
   it("GET transitions lists definitions with legacy one-line descriptions", async () => {
-    const outcome = await call<ApiTransition[]>(transitionsRoute.loader, { path: `${base}/transitions`, key: viewerKey });
+    const outcome = await call<ApiPage<ApiTransition>>(transitionsRoute.loader, { path: `${base}/transitions`, key: viewerKey });
     expect(outcome.status).toBe(200);
-    const byName = Object.fromEntries(outcome.body.map((t) => [t.name, t]));
+    expect(outcome.body.items.map((t) => t.name)).toEqual(["Assign", "Open it", "Start"]);
+    const byName = Object.fromEntries(outcome.body.items.map((t) => [t.name, t]));
     expect(byName["Open it"]).toMatchObject({ cardType: null, prerequisites: ["Has value of New for Status"], actions: ["Sets Status to Open"] });
     expect(byName["Assign"].actions).toEqual(["Sets Owner to (user input - required)"]);
   });
@@ -420,11 +443,12 @@ describe("/api/v1/projects/:identifier/cards", () => {
   it("GET lists cards newest first with properties by name", async () => {
     seedCard("First", { [statusId]: "New" });
     seedCard("Second", { [ownerId]: String(viewerId) });
-    const outcome = await call<ApiCard[]>(cardsRoute.loader, { path: `${base}/cards`, key: viewerKey });
+    const outcome = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards`, key: viewerKey });
     expect(outcome.status).toBe(200);
-    expect(outcome.body.map((c) => [c.number, c.name])).toEqual([[2, "Second"], [1, "First"]]);
-    expect(outcome.body[0].properties).toEqual({ Status: null, Owner: "viewer", Estimate: null, Stage: null });
-    expect(outcome.body[1].properties.Status).toBe("New");
+    expect(outcome.body.items.map((c) => [c.number, c.name])).toEqual([[2, "Second"], [1, "First"]]);
+    expect(outcome.body.items[0].properties).toEqual({ Status: null, Owner: "viewer", Estimate: null, Stage: null });
+    expect(outcome.body.items[1].properties.Status).toBe("New");
+    expect(outcome.body.nextCursor).toBeNull();
   });
 });
 
@@ -533,15 +557,15 @@ describe("/api/v1/projects/:identifier/cards/:number/transitions", () => {
 
   it("GET lists the transitions the caller may execute now, with their inputs", async () => {
     const number = seedCard("Fresh", { [statusId]: "New" });
-    const outcome = await call<ApiAvailableTransition[]>(cardTransitionsRoute.loader, { path: `${base}/cards/${number}/transitions`, params: params(number), key: devKey });
+    const outcome = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: `${base}/cards/${number}/transitions`, params: params(number), key: devKey });
     expect(outcome.status).toBe(200);
-    expect(outcome.body.map((t) => t.name)).toEqual(["Open it", "Start"]);
-    expect(outcome.body[0].inputs).toEqual([]);
+    expect(outcome.body.items.map((t) => t.name)).toEqual(["Open it", "Start"]);
+    expect(outcome.body.items[0].inputs).toEqual([]);
 
     mustOk(setCardPropertyValue(db, { projectId, cardNumber: number, propertyDefinitionId: statusId, value: "Open", actorUserId: devId }), "open");
-    const later = await call<ApiAvailableTransition[]>(cardTransitionsRoute.loader, { path: `${base}/cards/${number}/transitions`, params: params(number), key: devKey });
-    expect(later.body.map((t) => t.name)).toEqual(["Assign", "Start"]);
-    expect(later.body[0].inputs).toEqual([{ property: "Owner", kind: "user", required: true }]);
+    const later = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: `${base}/cards/${number}/transitions`, params: params(number), key: devKey });
+    expect(later.body.items.map((t) => t.name)).toEqual(["Assign", "Start"]);
+    expect(later.body.items[0].inputs).toEqual([{ property: "Owner", kind: "user", required: true }]);
   });
 
   it("POST executes a transition named by name — Status persisted, one version, TransitionExecuted", async () => {
@@ -609,5 +633,428 @@ describe("/api/v1/projects/:identifier/cards/:number/transitions", () => {
     });
     expect(outcome.status).toBe(403);
     expect(storedValue(reloadCard(number)!.id, statusId)).toBe("New");
+  });
+});
+
+// ------------------------------------------- pagination and filters (P-1)
+
+describe("collection pagination and card filters", () => {
+  const pagePath = (path: string, query: Record<string, string>) => `${path}?${new URLSearchParams(query).toString()}`;
+
+  it("walks a multi-page card list end to end through the cursor, newest first, unshifted by an insert mid-walk", async () => {
+    for (const name of ["One", "Two", "Three", "Four", "Five"]) seedCard(name);
+    const first = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit: "2" }), key: viewerKey });
+    expect(first.status).toBe(200);
+    expect(first.body.items.map((c) => c.number)).toEqual([5, 4]);
+    expect(first.body.nextCursor).toEqual(expect.any(String));
+
+    // A card created between two requests lands on no page already walked and shifts nothing.
+    seedCard("Six");
+
+    const second = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit: "2", cursor: first.body.nextCursor! }), key: viewerKey });
+    expect(second.body.items.map((c) => c.number)).toEqual([3, 2]);
+    expect(second.body.nextCursor).toEqual(expect.any(String));
+    const third = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit: "2", cursor: second.body.nextCursor! }), key: viewerKey });
+    expect(third.body.items.map((c) => c.number)).toEqual([1]);
+    expect(third.body.nextCursor).toBeNull();
+    // Every card was seen exactly once across the walk, except the one inserted after the walk began.
+    const seen = [...first.body.items, ...second.body.items, ...third.body.items].map((c) => c.number);
+    expect(seen).toEqual([5, 4, 3, 2, 1]);
+    // A fresh walk sees the new card first.
+    const fresh = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit: "1" }), key: viewerKey });
+    expect(fresh.body.items.map((c) => c.number)).toEqual([6]);
+  });
+
+  it("pages every collection by its own order: projects by name, definitions by position, transitions by name", async () => {
+    mustOk(createProject(db, { name: "Zeta", identifier: "zeta", actorUserId: adminId }), "zeta");
+    mustOk(createProject(db, { name: "alpha", identifier: "alpha", actorUserId: adminId }), "alpha");
+    const names: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: Outcome<ApiPage<ApiProject>> = await call<ApiPage<ApiProject>>(projectsRoute.loader, { path: pagePath("/api/v1/projects", { limit: "2", ...(cursor ? { cursor } : {}) }), key: viewerKey });
+      expect(page.status).toBe(200);
+      expect(page.body.items.length).toBeLessThanOrEqual(2);
+      names.push(...page.body.items.map((p) => p.name));
+      cursor = page.body.nextCursor;
+    } while (cursor !== null);
+    expect(names).toEqual(["alpha", "API Project", "Zeta"]);
+
+    const definitions = await call<ApiPage<ApiPropertyDefinition>>(definitionsRoute.loader, { path: pagePath(`${base}/property_definitions`, { limit: "3" }), key: viewerKey });
+    expect(definitions.body.items.map((d) => d.name)).toEqual(["Status", "Owner", "Estimate"]);
+    const rest = await call<ApiPage<ApiPropertyDefinition>>(definitionsRoute.loader, { path: pagePath(`${base}/property_definitions`, { limit: "3", cursor: definitions.body.nextCursor! }), key: viewerKey });
+    expect(rest.body.items.map((d) => d.name)).toEqual(["Stage"]);
+    expect(rest.body.nextCursor).toBeNull();
+
+    const transitions = await call<ApiPage<ApiTransition>>(transitionsRoute.loader, { path: pagePath(`${base}/transitions`, { limit: "2" }), key: viewerKey });
+    expect(transitions.body.items.map((t) => t.name)).toEqual(["Assign", "Open it"]);
+    const lastTransitions = await call<ApiPage<ApiTransition>>(transitionsRoute.loader, { path: pagePath(`${base}/transitions`, { limit: "2", cursor: transitions.body.nextCursor! }), key: viewerKey });
+    expect(lastTransitions.body.items.map((t) => t.name)).toEqual(["Start"]);
+
+    const types = await call<ApiPage<ApiCardType>>(cardTypesRoute.loader, { path: pagePath(`${base}/card_types`, { limit: "1" }), key: viewerKey });
+    expect(types.body.items.map((t) => t.name)).toEqual(["Card"]);
+    expect(types.body.nextCursor).toBeNull();
+
+    const number = seedCard("Paged", { [statusId]: "New" });
+    const available = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: pagePath(`${base}/cards/${number}/transitions`, { limit: "1" }), key: devKey, params: { identifier, number: String(number) } });
+    expect(available.body.items.map((t) => t.name)).toEqual(["Open it"]);
+    const availableRest = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: pagePath(`${base}/cards/${number}/transitions`, { limit: "1", cursor: available.body.nextCursor! }), key: devKey, params: { identifier, number: String(number) } });
+    expect(availableRest.body.items.map((t) => t.name)).toEqual(["Start"]);
+    expect(availableRest.body.nextCursor).toBeNull();
+  });
+
+  it("rejects a non-positive or non-numeric limit and a foreign cursor with 400, and clamps a huge limit", async () => {
+    for (const limit of ["0", "-1", "abc", "1.5"]) {
+      const outcome = await call<ApiErrorBody>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit }), key: viewerKey });
+      expect(outcome.status, `limit=${limit}`).toBe(400);
+      expect(outcome.body.error).toContain("'limit'");
+    }
+    for (const cursor of ["not-a-cursor", Buffer.from('{"offset":3}').toString("base64url"), Buffer.from("[null]").toString("base64url")]) {
+      const outcome = await call<ApiErrorBody>(projectsRoute.loader, { path: pagePath("/api/v1/projects", { cursor }), key: viewerKey });
+      expect(outcome.status, `cursor=${cursor}`).toBe(400);
+      expect(outcome.body.error).toContain("'cursor'");
+    }
+    for (let index = 0; index < 3; index += 1) seedCard(`Bulk ${index}`);
+    const clamped = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: pagePath(`${base}/cards`, { limit: "99999" }), key: viewerKey });
+    expect(clamped.status).toBe(200);
+    expect(clamped.body.items).toHaveLength(3);
+    expect(clamped.body.nextCursor).toBeNull();
+  });
+
+  it("filters the card list with the list page's filters[] and filters[mql] wire shapes, and rejects an invalid filter with 400", async () => {
+    const open = seedCard("Open one", { [statusId]: "Open", [estimateId]: "8" });
+    seedCard("New one", { [statusId]: "New", [estimateId]: "3" });
+    const unset = seedCard("Unset one");
+
+    const simple = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards?filters[]=${encodeURIComponent("[Status][is][Open]")}`, key: viewerKey });
+    expect(simple.status).toBe(200);
+    expect(simple.body.items.map((c) => c.number)).toEqual([open]);
+
+    const notSet = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards?filters[]=${encodeURIComponent("[Status][is][]")}`, key: viewerKey });
+    expect(notSet.body.items.map((c) => c.number)).toEqual([unset]);
+
+    const combined = await call<ApiPage<ApiCard>>(cardsRoute.loader, {
+      path: `${base}/cards?filters[]=${encodeURIComponent("[Status][is not][]")}&filters[]=${encodeURIComponent("[Estimate][is greater than][5]")}`,
+      key: viewerKey,
+    });
+    expect(combined.body.items.map((c) => c.number)).toEqual([open]);
+
+    const mql = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards?${new URLSearchParams({ "filters[mql]": "Status = Open OR Estimate < 5" })}`, key: viewerKey });
+    expect(mql.body.items.map((c) => c.name)).toEqual(["New one", "Open one"]);
+
+    const paged = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards?${new URLSearchParams({ "filters[]": "[Status][is not][]", limit: "1" })}`, key: viewerKey });
+    expect(paged.body.items.map((c) => c.name)).toEqual(["New one"]);
+    const pagedRest = await call<ApiPage<ApiCard>>(cardsRoute.loader, { path: `${base}/cards?${new URLSearchParams({ "filters[]": "[Status][is not][]", limit: "1", cursor: paged.body.nextCursor! })}`, key: viewerKey });
+    expect(pagedRest.body.items.map((c) => c.name)).toEqual(["Open one"]);
+    expect(pagedRest.body.nextCursor).toBeNull();
+
+    const invalid = await call<ApiErrorBody>(cardsRoute.loader, { path: `${base}/cards?filters[]=${encodeURIComponent("[Nope][is][x]")}`, key: viewerKey });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toBe("invalid filters");
+    expect(invalid.body.errors?.filters?.join(" ")).toMatch(/Nope/);
+    const badMql = await call<ApiErrorBody>(cardsRoute.loader, { path: `${base}/cards?${new URLSearchParams({ "filters[mql]": "SELECT name" })}`, key: viewerKey });
+    expect(badMql.status).toBe(400);
+  });
+});
+
+// ----------------------------------------- definitions over the API (P-2)
+
+describe("/api/v1/projects/:identifier/card_types — define and delete", () => {
+  const cardTypeRows = () => db.select().from(cardTypes).where(eq(cardTypes.projectId, projectId)).orderBy(asc(cardTypes.position)).all();
+
+  it("POST defines a card type through DefineCardType for a project admin — 201, row and event persisted", async () => {
+    const outcome = await call<ApiCardType>(cardTypesRoute.action, { path: `${base}/card_types`, key: adminKey, body: { name: "Bug" } });
+    expect(outcome.status).toBe(201);
+    expect(outcome.body).toMatchObject({ name: "Bug", position: 2 });
+    expect(cardTypeRows().map((t) => t.name)).toEqual(["Card", "Bug"]);
+    expect(events("CardTypeDefined")).toHaveLength(1);
+  });
+
+  it("POST applies the settings page's validation: a taken name is 422, a full member is 403, a bad body is 400", async () => {
+    const taken = await call<ApiErrorBody>(cardTypesRoute.action, { path: `${base}/card_types`, key: adminKey, body: { name: "card" } });
+    expect(taken.status).toBe(422);
+    expect(taken.body.errors).toEqual({ name: ["has already been taken"] });
+    const forbidden = await call<ApiErrorBody>(cardTypesRoute.action, { path: `${base}/card_types`, key: devKey, body: { name: "Bug" } });
+    expect(forbidden.status).toBe(403);
+    const bad = await call<ApiErrorBody>(cardTypesRoute.action, { path: `${base}/card_types`, key: adminKey, body: { name: 7 } });
+    expect(bad.status).toBe(400);
+    expect(cardTypeRows().map((t) => t.name)).toEqual(["Card"]);
+  });
+
+  it("GET /card_types/:id answers the type, or 404", async () => {
+    const id = cardTypeId();
+    const outcome = await call<ApiCardType>(cardTypeRoute.loader, { path: `${base}/card_types/${id}`, params: { identifier, id: String(id) }, key: viewerKey });
+    expect(outcome.status).toBe(200);
+    expect(outcome.body.name).toBe("Card");
+    const missing = await call<ApiErrorBody>(cardTypeRoute.loader, { path: `${base}/card_types/999`, params: { identifier, id: "999" }, key: viewerKey });
+    expect(missing.status).toBe(404);
+  });
+
+  it("DELETE removes an unused type through DeleteCardType with the transitions restricted to it — 204, rows gone, CardTypeDeleted", async () => {
+    const bug = mustOk(defineCardType(db, { projectId, name: "Bug", actorUserId: adminId }), "Bug");
+    const restricted = mustOk(defineTransition(db, {
+      projectId, name: "Triage", cardTypeId: bug.id, prerequisites: [], actions: [{ propertyDefinitionId: statusId, inputMode: "fixed", value: "Open" }], actorUserId: adminId,
+    }), "Triage");
+    const outcome = await call(cardTypeRoute.action, { path: `${base}/card_types/${bug.id}`, params: { identifier, id: String(bug.id) }, method: "DELETE", key: adminKey });
+    expect(outcome.status).toBe(204);
+    expect(cardTypeRows().map((t) => t.name)).toEqual(["Card"]);
+    expect(db.select().from(transitions).where(eq(transitions.id, restricted.id)).all()).toEqual([]);
+    expect(db.select().from(transitionActions).where(eq(transitionActions.transitionId, restricted.id)).all()).toEqual([]);
+    expect(events("CardTypeDeleted")).toHaveLength(1);
+    // The project's other transitions are untouched.
+    expect(db.select().from(transitions).where(eq(transitions.projectId, projectId)).all().map((t) => t.name).sort()).toEqual(["Assign", "Open it", "Start"]);
+  });
+
+  it("DELETE refuses the last type and a type in use with legacy's message, a full member with 403, and deletes nothing", async () => {
+    const only = cardTypeId();
+    const last = await call<ApiErrorBody>(cardTypeRoute.action, { path: `${base}/card_types/${only}`, params: { identifier, id: String(only) }, method: "DELETE", key: adminKey });
+    expect(last.status).toBe(422);
+    expect(last.body.errors).toEqual({ cardType: ["Card cannot be deleted because it is being used or is the last card type."] });
+
+    const bug = mustOk(defineCardType(db, { projectId, name: "Bug", actorUserId: adminId }), "Bug");
+    mustOk(createCard(db, { projectId, name: "A bug", cardTypeId: bug.id, actorUserId: devId }), "bug card");
+    const used = await call<ApiErrorBody>(cardTypeRoute.action, { path: `${base}/card_types/${bug.id}`, params: { identifier, id: String(bug.id) }, method: "DELETE", key: adminKey });
+    expect(used.status).toBe(422);
+    expect(used.body.errors?.cardType?.[0]).toBe("Bug cannot be deleted because it is being used or is the last card type.");
+
+    const forbidden = await call<ApiErrorBody>(cardTypeRoute.action, { path: `${base}/card_types/${only}`, params: { identifier, id: String(only) }, method: "DELETE", key: devKey });
+    expect(forbidden.status).toBe(403);
+    expect(cardTypeRows().map((t) => t.name)).toEqual(["Card", "Bug"]);
+    expect(events("CardTypeDeleted")).toHaveLength(0);
+  });
+});
+
+describe("/api/v1/projects/:identifier/transitions — define and delete", () => {
+  const prerequisitesOf = (transitionId: number) =>
+    db.select().from(transitionPrerequisites).where(eq(transitionPrerequisites.transitionId, transitionId)).all();
+  const actionsOf = (transitionId: number) =>
+    db.select().from(transitionActions).where(eq(transitionActions.transitionId, transitionId)).all();
+
+  it("POST defines a transition by property, card type, user, and group names through DefineTransition — 201 and persisted", async () => {
+    const outcome = await call<ApiTransition>(transitionsRoute.action, {
+      path: `${base}/transitions`, key: adminKey,
+      body: {
+        name: "Close it", cardType: "card",
+        prerequisites: [{ property: "Status", value: "Open" }, { property: "Estimate", set: true }],
+        actions: [{ property: "Status", value: "Closed" }, { property: "Owner", input: "optional" }],
+        usedBy: { users: ["dev"] },
+      },
+    });
+    expect(outcome.status).toBe(201);
+    expect(outcome.body).toMatchObject({
+      name: "Close it", cardType: "Card",
+      prerequisites: ["Has value of Open for Status", "Has value set for Estimate", "User is DEV"],
+      actions: ["Sets Status to Closed", "Sets Owner to (user input - optional)"],
+    });
+    const stored = db.select().from(transitions).where(and(eq(transitions.projectId, projectId), eq(transitions.name, "Close it"))).get()!;
+    expect(stored.cardTypeId).toBe(cardTypeId());
+    expect(prerequisitesOf(stored.id).map((p) => [p.kind, p.propertyDefinitionId, p.value, p.userId])).toEqual([
+      ["has_specific_value", statusId, "Open", null], ["has_set_value", estimateId, null, null], ["is_user", null, null, devId],
+    ]);
+    expect(actionsOf(stored.id).map((a) => [a.propertyDefinitionId, a.inputMode, a.value])).toEqual([
+      [statusId, "fixed", "Closed"], [ownerId, "user_input_optional", null],
+    ]);
+    expect(events("TransitionDefined")).toHaveLength(1);
+  });
+
+  it("POST stores a null prerequisite value as the nil-valued HasSpecificValue — the property must be unset (ADR-0010)", async () => {
+    const outcome = await call<ApiTransition>(transitionsRoute.action, {
+      path: `${base}/transitions`, key: adminKey,
+      body: { name: "Begin", prerequisites: [{ property: "Status", value: null }], actions: [{ property: "Status", value: "New" }] },
+    });
+    expect(outcome.status).toBe(201);
+    const stored = db.select().from(transitions).where(and(eq(transitions.projectId, projectId), eq(transitions.name, "Begin"))).get()!;
+    expect(prerequisitesOf(stored.id).map((p) => [p.kind, p.value])).toEqual([["has_specific_value", null]]);
+    // Round trip: the definition reads back with the nil requirement described, and the transition applies only to an unset card.
+    const listed = await call<ApiPage<ApiTransition>>(transitionsRoute.loader, { path: `${base}/transitions`, key: viewerKey });
+    expect(listed.body.items.find((t) => t.name === "Begin")!.prerequisites).toEqual([expect.stringMatching(/not set/i)]);
+    const unset = seedCard("Blank");
+    const withStatus = seedCard("Started", { [statusId]: "Open" });
+    const forUnset = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: `${base}/cards/${unset}/transitions`, params: { identifier, number: String(unset) }, key: devKey });
+    expect(forUnset.body.items.map((t) => t.name)).toContain("Begin");
+    const forSet = await call<ApiPage<ApiAvailableTransition>>(cardTransitionsRoute.loader, { path: `${base}/cards/${withStatus}/transitions`, params: { identifier, number: String(withStatus) }, key: devKey });
+    expect(forSet.body.items.map((t) => t.name)).not.toContain("Begin");
+  });
+
+  it("POST rejects an invalid definition — unknown names are 422 under their field, the command's rules are 422, a malformed body is 400, a full member is 403 — and stores nothing", async () => {
+    const before = db.select().from(transitions).where(eq(transitions.projectId, projectId)).all().length;
+    const unknownProperty = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", prerequisites: [{ property: "Nope", value: "1" }], actions: [{ property: "Status", value: "Open" }] } });
+    expect(unknownProperty.status).toBe(422);
+    expect(unknownProperty.body.errors).toEqual({ prerequisites: ["unknown property 'Nope'"] });
+    const unknownUser = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", actions: [{ property: "Status", value: "Open" }], usedBy: { users: ["ghost"] } } });
+    expect(unknownUser.status).toBe(422);
+    expect(unknownUser.body.errors).toEqual({ usedBy: ["unknown user 'ghost'"] });
+    const unknownType = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", cardType: "Epic", actions: [{ property: "Status", value: "Open" }] } });
+    expect(unknownType.status).toBe(422);
+    expect(unknownType.body.errors).toEqual({ cardType: ["unknown card type 'Epic'"] });
+    const noActions = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", actions: [] } });
+    expect(noActions.status).toBe(422);
+    expect(noActions.body.errors?.actions).toEqual(["Transition must set at least one property."]);
+    const badValue = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", actions: [{ property: "Status", value: "Nonsense" }] } });
+    expect(badValue.status).toBe(422);
+    const malformed = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", actions: "Status" } });
+    expect(malformed.status).toBe(400);
+    const badInput = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: adminKey, body: { name: "X", actions: [{ property: "Status", input: "maybe" }] } });
+    expect(badInput.status).toBe(400);
+    const forbidden = await call<ApiErrorBody>(transitionsRoute.action, { path: `${base}/transitions`, key: devKey, body: { name: "X", actions: [{ property: "Status", value: "Open" }] } });
+    expect(forbidden.status).toBe(403);
+    expect(db.select().from(transitions).where(eq(transitions.projectId, projectId)).all().length).toBe(before);
+  });
+
+  it("GET /transitions/:id answers the definition; DELETE removes it through DeleteTransition (204) and refuses a full member", async () => {
+    const openIt = db.select().from(transitions).where(and(eq(transitions.projectId, projectId), eq(transitions.name, "Open it"))).get()!;
+    const shown = await call<ApiTransition>(transitionRoute.loader, { path: `${base}/transitions/${openIt.id}`, params: { identifier, id: String(openIt.id) }, key: viewerKey });
+    expect(shown.status).toBe(200);
+    expect(shown.body.name).toBe("Open it");
+    const forbidden = await call<ApiErrorBody>(transitionRoute.action, { path: `${base}/transitions/${openIt.id}`, params: { identifier, id: String(openIt.id) }, method: "DELETE", key: devKey });
+    expect(forbidden.status).toBe(403);
+    const deleted = await call(transitionRoute.action, { path: `${base}/transitions/${openIt.id}`, params: { identifier, id: String(openIt.id) }, method: "DELETE", key: adminKey });
+    expect(deleted.status).toBe(204);
+    expect(db.select().from(transitions).where(eq(transitions.id, openIt.id)).all()).toEqual([]);
+    expect(prerequisitesOf(openIt.id)).toEqual([]);
+    expect(events("TransitionDeleted")).toHaveLength(1);
+    const gone = await call<ApiErrorBody>(transitionRoute.loader, { path: `${base}/transitions/${openIt.id}`, params: { identifier, id: String(openIt.id) }, key: viewerKey });
+    expect(gone.status).toBe(404);
+  });
+});
+
+// -------------------------------------------- content over the API (P-3)
+
+describe("/api/v1/projects/:identifier/pages", () => {
+  it("POST creates a page through CreatePage — sanitized on the way in (ADR-0011), version 1 persisted, readable by identifier", async () => {
+    const outcome = await call<ApiWikiPage>(pagesRoute.action, { path: `${base}/pages`, key: devKey, body: { name: "Release Notes", content: "<p>Hello <b>there</b></p><script>alert(1)</script><p onclick=\"x()\">click</p>" } });
+    expect(outcome.status).toBe(201);
+    expect(outcome.body).toMatchObject({ identifier: "Release_Notes", name: "Release Notes", version: 1, createdBy: "dev", modifiedBy: "dev" });
+    expect(outcome.body.content).not.toContain("<script");
+    expect(outcome.body.content).not.toContain("onclick");
+    expect(outcome.body.content).toContain("<b>there</b>");
+    const stored = db.select().from(pages).where(and(eq(pages.projectId, projectId), eq(pages.name, "Release Notes"))).get()!;
+    expect(stored.content).toBe(outcome.body.content);
+    expect(db.select().from(pageVersions).where(eq(pageVersions.pageId, stored.id)).all()).toHaveLength(1);
+    expect(events("PageCreated")).toHaveLength(1);
+
+    const shown = await call<ApiWikiPage>(pageRoute.loader, { path: `${base}/pages/release_notes`, params: { identifier, pagename: "release_notes" }, key: viewerKey });
+    expect(shown.status).toBe(200);
+    expect(shown.body.name).toBe("Release Notes");
+    const missing = await call<ApiErrorBody>(pageRoute.loader, { path: `${base}/pages/Nope`, params: { identifier, pagename: "Nope" }, key: viewerKey });
+    expect(missing.status).toBe(404);
+  });
+
+  it("GET lists pages by name in pages; POST refuses a taken or invalid name (422) and a readonly member (403)", async () => {
+    for (const name of ["Zebra", "alpha", "Middle"]) mustOk(createPage(db, { projectId, name, content: "<p>x</p>", actorUserId: devId }), name);
+    const first = await call<ApiPage<ApiWikiPage>>(pagesRoute.loader, { path: `${base}/pages?limit=2`, key: viewerKey });
+    expect(first.body.items.map((p) => p.name)).toEqual(["alpha", "Middle"]);
+    const rest = await call<ApiPage<ApiWikiPage>>(pagesRoute.loader, { path: `${base}/pages?limit=2&cursor=${first.body.nextCursor}`, key: viewerKey });
+    expect(rest.body.items.map((p) => p.name)).toEqual(["Zebra"]);
+    expect(rest.body.nextCursor).toBeNull();
+
+    const taken = await call<ApiErrorBody>(pagesRoute.action, { path: `${base}/pages`, key: devKey, body: { name: "ALPHA" } });
+    expect(taken.status).toBe(422);
+    expect(taken.body.errors?.name).toBeDefined();
+    const slash = await call<ApiErrorBody>(pagesRoute.action, { path: `${base}/pages`, key: devKey, body: { name: "a/b" } });
+    expect(slash.status).toBe(422);
+    const forbidden = await call<ApiErrorBody>(pagesRoute.action, { path: `${base}/pages`, key: viewerKey, body: { name: "Mine" } });
+    expect(forbidden.status).toBe(403);
+    expect(db.select().from(pages).where(eq(pages.projectId, projectId)).all()).toHaveLength(3);
+  });
+});
+
+describe("/api/v1/projects/:identifier/murmurs", () => {
+  it("POST posts through PostMurmur — mentions and card links resolved at post time (ADR-0017), persisted, and reported", async () => {
+    const number = seedCard("Referenced");
+    const outcome = await call<ApiMurmur>(murmursRoute.action, { path: `${base}/murmurs`, key: devKey, body: { body: `Look at #${number} and #999 @viewer @nobody` } });
+    expect(outcome.status).toBe(201);
+    expect(outcome.body).toMatchObject({ body: `Look at #${number} and #999 @viewer @nobody`, author: "dev", authorName: "DEV", cardNumber: null, mentions: ["viewer"], cards: [number] });
+    const stored = db.select().from(murmurs).where(eq(murmurs.projectId, projectId)).all();
+    expect(stored).toHaveLength(1);
+    expect(db.select().from(murmurMentions).where(eq(murmurMentions.murmurId, stored[0].id)).all().map((m) => m.userId)).toEqual([viewerId]);
+    expect(db.select().from(cardMurmurLinks).where(eq(cardMurmurLinks.murmurId, stored[0].id)).all()).toHaveLength(1);
+    expect(events("MurmurPosted")).toHaveLength(1);
+
+    const shown = await call<ApiMurmur>(murmurRoute.loader, { path: `${base}/murmurs/${stored[0].id}`, params: { identifier, id: String(stored[0].id) }, key: viewerKey });
+    expect(shown.status).toBe(200);
+    expect(shown.body).toEqual(outcome.body);
+    const missing = await call<ApiErrorBody>(murmurRoute.loader, { path: `${base}/murmurs/999`, params: { identifier, id: "999" }, key: viewerKey });
+    expect(missing.status).toBe(404);
+  });
+
+  it("GET lists newest first in pages; POST refuses a blank body (422) and a readonly member (403)", async () => {
+    for (const body of ["first", "second", "third"]) mustOk(postMurmur(db, { projectId, body, actorUserId: devId }), body);
+    const first = await call<ApiPage<ApiMurmur>>(murmursRoute.loader, { path: `${base}/murmurs?limit=2`, key: viewerKey });
+    expect(first.body.items.map((m) => m.body)).toEqual(["third", "second"]);
+    const rest = await call<ApiPage<ApiMurmur>>(murmursRoute.loader, { path: `${base}/murmurs?limit=2&cursor=${first.body.nextCursor}`, key: viewerKey });
+    expect(rest.body.items.map((m) => m.body)).toEqual(["first"]);
+    expect(rest.body.nextCursor).toBeNull();
+
+    const blank = await call<ApiErrorBody>(murmursRoute.action, { path: `${base}/murmurs`, key: devKey, body: { body: "   " } });
+    expect(blank.status).toBe(422);
+    expect(blank.body.errors).toEqual({ body: ["can't be blank"] });
+    const forbidden = await call<ApiErrorBody>(murmursRoute.action, { path: `${base}/murmurs`, key: viewerKey, body: { body: "psst" } });
+    expect(forbidden.status).toBe(403);
+    expect(db.select().from(murmurs).where(eq(murmurs.projectId, projectId)).all()).toHaveLength(3);
+  });
+});
+
+describe("/api/v1/projects/:identifier/cards/:number/attachments", () => {
+  const attachmentsDir = process.env.ATTACHMENTS_DIR!;
+  const storedFiles = (): string[] => {
+    if (!existsSync(attachmentsDir)) return [];
+    const walk = (dirPath: string): string[] =>
+      readdirSync(dirPath).flatMap((entry) => {
+        const full = join(dirPath, entry);
+        return statSync(full).isDirectory() ? walk(full) : [full];
+      });
+    return walk(attachmentsDir);
+  };
+
+  async function upload(number: number, key: string, fileName: string, content: string, type = "text/plain") {
+    const form = new FormData();
+    form.set("file", new File([content], fileName, { type }));
+    const request = new Request(`http://localhost${base}/cards/${number}/attachments`, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form });
+    let response: Response;
+    try {
+      response = (await attachmentsRoute.action({ request, params: { identifier, number: String(number) }, context: {} } as never)) as Response;
+    } catch (thrown) {
+      if (!(thrown instanceof Response)) throw thrown;
+      response = thrown;
+    }
+    const text = await response.text();
+    return { status: response.status, body: (text ? JSON.parse(text) : null) as ApiAttachment & ApiErrorBody };
+  }
+
+  it("POST stores the bytes and records them through AddCardAttachment — 201, row persisted, file on disk, bytes served back by url", async () => {
+    const number = seedCard("Attach me");
+    const outcome = await upload(number, devKey, "notes.txt", "hello attachments");
+    expect(outcome.status).toBe(201);
+    expect(outcome.body).toMatchObject({ fileName: "notes.txt", contentType: "text/plain", size: 17, cardVersion: 1, uploadedBy: "dev" });
+    expect(outcome.body.url).toBe(`${base}/cards/${number}/attachments/${outcome.body.id}`);
+    const row = db.select().from(attachments).where(eq(attachments.id, outcome.body.id)).get()!;
+    expect(row.cardId).toBe(reloadCard(number)!.id);
+    expect(storedFiles().map((f) => f.endsWith("/notes.txt"))).toEqual([true]);
+    expect(events("CardAttachmentAdded")).toHaveLength(1);
+
+    // `call` parses JSON; drive the loader directly for the bytes.
+    const raw = (await attachmentRoute.loader({ request: new Request(`http://localhost${outcome.body.url}`, { headers: { Authorization: `Bearer ${viewerKey}` } }), params: { identifier, number: String(number), attachmentId: String(outcome.body.id) }, context: {} } as never)) as Response;
+    expect(raw.status).toBe(200);
+    expect(raw.headers.get("Content-Type")).toBe("text/plain");
+    expect(raw.headers.get("Content-Disposition")).toBe('attachment; filename="notes.txt"');
+    expect(await raw.text()).toBe("hello attachments");
+    const meta = await call<ApiAttachment>(attachmentRoute.loader, { path: outcome.body.url, params: { identifier, number: String(number), attachmentId: String(outcome.body.id) }, key: viewerKey, headers: { Accept: "application/json" } });
+    expect(meta.body).toEqual(outcome.body);
+
+    const listed = await call<ApiPage<ApiAttachment>>(attachmentsRoute.loader, { path: `${base}/cards/${number}/attachments`, params: { identifier, number: String(number) }, key: viewerKey });
+    expect(listed.body.items).toEqual([outcome.body]);
+  });
+
+  it("POST by a readonly member is 403 and leaves no bytes behind; a non-multipart body is 400; an unknown attachment is 404", async () => {
+    const number = seedCard("Guarded");
+    rmSync(attachmentsDir, { recursive: true, force: true });
+    const forbidden = await upload(number, viewerKey, "secret.txt", "nope");
+    expect(forbidden.status).toBe(403);
+    expect(storedFiles()).toEqual([]);
+    expect(db.select().from(attachments).where(eq(attachments.projectId, projectId)).all()).toEqual([]);
+    const notMultipart = await call<ApiErrorBody>(attachmentsRoute.action, { path: `${base}/cards/${number}/attachments`, params: { identifier, number: String(number) }, key: devKey, body: { file: "x" } });
+    expect(notMultipart.status).toBe(400);
+    const missing = await call<ApiErrorBody>(attachmentRoute.loader, { path: `${base}/cards/${number}/attachments/42`, params: { identifier, number: String(number), attachmentId: "42" }, key: devKey });
+    expect(missing.status).toBe(404);
   });
 });

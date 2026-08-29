@@ -40,6 +40,8 @@ export const users = sqliteTable(
       .notNull()
       .default(true),
     lastLoginAt: integer("last_login_at", { mode: "timestamp_ms" }),
+    /** IANA zone name timestamps are displayed in for this user (ADR-0023 Decision 6); storage stays UTC. */
+    timeZone: text("time_zone").notNull().default("UTC"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -86,6 +88,13 @@ export const apiKeys = sqliteTable(
      * existed; those authenticate as bearer keys only.
      */
     signingSecretSealed: text("signing_secret_sealed"),
+    /**
+     * The secret this key had before its last rotation, sealed, still
+     * accepted until `previous_secret_expires_at` (P-8 overlap window);
+     * both null once the window closes or when never rotated.
+     */
+    previousSigningSecretSealed: text("previous_signing_secret_sealed"),
+    previousSecretExpiresAt: integer("previous_secret_expires_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),

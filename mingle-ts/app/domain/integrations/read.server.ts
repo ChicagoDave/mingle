@@ -3,7 +3,8 @@
  * the card page show (Phase 32).
  *
  * Public interface: `slackIntegrationView`, `githubIntegrationViews`,
- * `commitLinksForCard`, `recentCommitLinks`, `findGithubIntegrations`.
+ * `commitLinksForCard`, `recentCommitLinks`, `findGithubIntegrations`,
+ * `pullRequestLinksForCard`.
  *
  * Owner context: External Integrations. Reads only; never exposes a
  * sealed secret.
@@ -11,19 +12,45 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { cards } from "~/db/schema/cards";
-import { commitLinks, githubIntegrations, slackIntegrations, type GithubIntegrationRow } from "~/db/schema/integrations";
-import type { CommitLinkView, GithubIntegrationView, SlackIntegrationView } from "~/shared/wire-types";
+import { commitLinks, githubIntegrations, pullRequestLinks, slackEventRoutes, slackIntegrations, type GithubIntegrationRow } from "~/db/schema/integrations";
+import {
+  SLACK_EVENT_TYPES,
+  type CommitLinkView,
+  type GithubIntegrationView,
+  type PullRequestLinkView,
+  type ScmProvider,
+  type SlackEventType,
+  type SlackIntegrationView,
+  type SlackRouteTarget,
+} from "~/shared/wire-types";
 
-/** The project's Slack notifier, or the "not configured" view. */
+/** The project's webhooks (default first, then by id) and its event routing, or the "not configured" view. */
 export function slackIntegrationView(db: BetterSQLite3Database, projectId: number): SlackIntegrationView {
-  const row = db.select().from(slackIntegrations).where(eq(slackIntegrations.projectId, projectId)).get();
-  if (!row) return { configured: false, enabled: false, channelLabel: "", lastDeliveredAt: null, lastError: null };
+  const rows = db
+    .select()
+    .from(slackIntegrations)
+    .where(eq(slackIntegrations.projectId, projectId))
+    .orderBy(desc(slackIntegrations.isDefault), slackIntegrations.id)
+    .all();
+  const routes = Object.fromEntries(SLACK_EVENT_TYPES.map((type) => [type, "default" as SlackRouteTarget])) as Record<
+    SlackEventType,
+    SlackRouteTarget
+  >;
+  for (const route of db.select().from(slackEventRoutes).where(eq(slackEventRoutes.projectId, projectId)).all()) {
+    if ((SLACK_EVENT_TYPES as readonly string[]).includes(route.eventType))
+      routes[route.eventType as SlackEventType] = route.slackIntegrationId ?? "suppressed";
+  }
   return {
-    configured: true,
-    enabled: row.enabled,
-    channelLabel: row.channelLabel,
-    lastDeliveredAt: row.lastDeliveredAt?.toISOString() ?? null,
-    lastError: row.lastError,
+    configured: rows.length > 0,
+    webhooks: rows.map((row) => ({
+      id: row.id,
+      channelLabel: row.channelLabel,
+      enabled: row.enabled,
+      isDefault: row.isDefault,
+      lastDeliveredAt: row.lastDeliveredAt?.toISOString() ?? null,
+      lastError: row.lastError,
+    })),
+    routes,
   };
 }
 
@@ -37,19 +64,47 @@ export function githubIntegrationViews(db: BetterSQLite3Database, projectId: num
     .all()
     .map((row) => ({
       id: row.id,
+      provider: row.provider as ScmProvider,
       repository: row.repository,
       enabled: row.enabled,
       lastReceivedAt: row.lastReceivedAt?.toISOString() ?? null,
     }));
 }
 
-/** The enabled integrations of a project for one repository name (lowercase), for signature checks. */
-export function findGithubIntegrations(db: BetterSQLite3Database, projectId: number, repository: string): GithubIntegrationRow[] {
+/** The enabled integrations of a project for one repository name (lowercase) on one host, for signature checks. */
+export function findGithubIntegrations(db: BetterSQLite3Database, projectId: number, repository: string, provider: ScmProvider = "github"): GithubIntegrationRow[] {
   return db
     .select()
     .from(githubIntegrations)
-    .where(and(eq(githubIntegrations.projectId, projectId), eq(githubIntegrations.repository, repository.toLowerCase()), eq(githubIntegrations.enabled, true)))
+    .where(
+      and(
+        eq(githubIntegrations.projectId, projectId),
+        eq(githubIntegrations.provider, provider),
+        eq(githubIntegrations.repository, repository.toLowerCase()),
+        eq(githubIntegrations.enabled, true),
+      ),
+    )
     .all();
+}
+
+/** The pull requests linked to a card, most recently updated first. */
+export function pullRequestLinksForCard(db: BetterSQLite3Database, cardId: number, cardNumber: number): PullRequestLinkView[] {
+  return db
+    .select()
+    .from(pullRequestLinks)
+    .where(eq(pullRequestLinks.cardId, cardId))
+    .orderBy(desc(pullRequestLinks.updatedAt), desc(pullRequestLinks.id))
+    .all()
+    .map((row) => ({
+      number: row.number,
+      title: row.title,
+      url: row.url,
+      repository: row.repository,
+      state: row.state,
+      authorLogin: row.authorLogin,
+      updatedAt: row.updatedAt.toISOString(),
+      cardNumber,
+    }));
 }
 
 function view(row: typeof commitLinks.$inferSelect, cardNumber: number): CommitLinkView {
@@ -62,6 +117,16 @@ function view(row: typeof commitLinks.$inferSelect, cardNumber: number): CommitL
     message: row.message,
     committedAt: row.committedAt.toISOString(),
     cardNumber,
+    status:
+      row.statusState && row.statusAt
+        ? {
+            state: row.statusState,
+            context: row.statusContext ?? "default",
+            description: row.statusDescription ?? "",
+            url: row.statusUrl,
+            reportedAt: row.statusAt.toISOString(),
+          }
+        : null,
   };
 }
 

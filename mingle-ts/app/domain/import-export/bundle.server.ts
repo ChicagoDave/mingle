@@ -1,37 +1,51 @@
 /**
  * Import/Export — the project template bundle format (Phase 28).
  *
- * Purpose: the one document shape a project's configuration travels
- * in. A bundle is versioned JSON (this is a rewrite, so not legacy's
+ * Purpose: the one document shape a project's configuration — and,
+ * since version 2, a project template's content — travels in. A
+ * bundle is versioned JSON (this is a rewrite, so not legacy's
  * YAML-per-table archive) that names everything by NAME, never by id:
  * card types, properties, trees, aggregates, transitions and project
  * variables reference each other the way a person would describe
- * them, so a bundle imports into any installation. It carries
- * configuration only — no cards, versions, members, pages or history
- * (legacy `ImportExport::TEMPLATE_MODELS` minus what later phases
- * own). Identity is per installation, so `is_user` / `in_group`
- * prerequisites and the values of UserType / CardType variables are
- * not carried.
+ * them, so a bundle imports into any installation. Version 1 carried
+ * configuration only; version 2 (ADR-0024) adds four OPTIONAL content
+ * sections — `cardDefaults`, `favorites` (team favorites, tabs, WIP
+ * limits), `cards` (seed cards) and `pages` — each empty when absent,
+ * so a version-1 document is a version-2 document with none of them.
+ * A template is a bundle: `mingle-ts/templates/*.json` are documents
+ * of this shape. Identity is still per installation: `is_user` /
+ * `in_group` prerequisites and UserType / CardType variable values
+ * are not carried, and the only user value a card or default may hold
+ * is the marker `(current user)` (wire-types `CURRENT_USER_MARKER`),
+ * resolved to the importing actor. Page content may carry
+ * `{{template:today}}` / `{{template:today±N}}` tokens, which the
+ * importer expands to ISO dates before storage (Decision 5).
  *
  * Invariant: no runtime-specific types — plain data and a parser, so
  * both the exporter and any client can import this file.
  *
- * Public interface: `BUNDLE_FORMAT`, `BUNDLE_VERSION`, the
- * `ProjectBundle` type family, `parseBundle`.
+ * Public interface: `BUNDLE_FORMAT`, `BUNDLE_VERSION`,
+ * `SUPPORTED_BUNDLE_VERSIONS`, the `ProjectBundle` type family,
+ * `parseBundle`, `TEMPLATE_TODAY_TOKEN`, `expandTemplateTokens`.
  *
  * Owner context: Import/Export.
  */
 import { type CommandResult, reject } from "~/domain/command.server";
 import {
   AGGREGATE_TYPES,
+  CARD_VIEW_STYLES,
+  CURRENT_USER_MARKER,
   PROJECT_VARIABLE_DATA_TYPES,
   TRANSITION_ACTION_INPUT_MODES,
+  type CardViewStyle,
   type ProjectVariableDataType,
   type TransitionActionInputMode,
 } from "~/shared/wire-types";
 
 export const BUNDLE_FORMAT = "mingle-project-template";
-export const BUNDLE_VERSION = 1;
+/** The version this code writes; every version in SUPPORTED_BUNDLE_VERSIONS still reads. */
+export const BUNDLE_VERSION = 2;
+export const SUPPORTED_BUNDLE_VERSIONS = [1, 2] as const;
 
 /** The property kinds a bundle lists under `properties` (defined directly, not by a tree). */
 export const BUNDLE_PROPERTY_KINDS = ["text", "number", "date", "user", "enumerated", "formula"] as const;
@@ -97,10 +111,48 @@ export interface BundleVariable {
   value: string | null;
 }
 
-/** A project's full configuration, portable by name. */
+/** One card type's default property values, by property name (P-2). */
+export interface BundleCardDefaults {
+  cardType: string;
+  /** Property name → value; a user property may hold only `(current user)`. */
+  values: Record<string, string>;
+}
+
+/** A team favorite — a saved card view, optionally a tab, with WIP limits (P-3). */
+export interface BundleFavorite {
+  name: string;
+  style: CardViewStyle;
+  filters: string[];
+  columns: string[];
+  /** Lane property name (grid); "" when ungrouped. */
+  groupBy: string;
+  mql?: string;
+  tabView: boolean;
+  /** Lane value → count limit (grid style grouped by an enumerated property). */
+  wipLimits: Record<string, number>;
+}
+
+/** A seed card. */
+export interface BundleCard {
+  name: string;
+  cardType: string;
+  /** Kept when given; the project's next number otherwise. */
+  number?: number;
+  description?: string | null;
+  /** Property name → value; a user property may hold only `(current user)`. */
+  values: Record<string, string>;
+}
+
+/** A wiki page; `content` may carry template tokens. */
+export interface BundlePage {
+  name: string;
+  content: string | null;
+}
+
+/** A project's full configuration, portable by name, plus optional content (version 2). */
 export interface ProjectBundle {
   format: typeof BUNDLE_FORMAT;
-  version: typeof BUNDLE_VERSION;
+  version: (typeof SUPPORTED_BUNDLE_VERSIONS)[number];
   /** ISO timestamp of the export. */
   exportedAt: string;
   source: { name: string; identifier: string; description: string | null };
@@ -112,6 +164,29 @@ export interface ProjectBundle {
   aggregates: BundleAggregate[];
   transitions: BundleTransition[];
   variables: BundleVariable[];
+  /** Content sections (version 2; empty for a version-1 document). */
+  cardDefaults: BundleCardDefaults[];
+  favorites: BundleFavorite[];
+  cards: BundleCard[];
+  pages: BundlePage[];
+}
+
+/** The template-time token: `{{template:today}}`, `{{template:today+14}}`, `{{template:today-2}}`. */
+export const TEMPLATE_TODAY_TOKEN = /\{\{\s*template:today\s*(?:([+-])\s*(\d+))?\s*\}\}/g;
+
+/**
+ * Replaces every template-time token in page content with an ISO date
+ * relative to `today` (Decision 5 — expanded once, on import).
+ *
+ * @param content - page content as authored in the template
+ * @param today - the instantiation date
+ */
+export function expandTemplateTokens(content: string, today: Date): string {
+  return content.replace(TEMPLATE_TODAY_TOKEN, (_match, sign: string | undefined, days: string | undefined) => {
+    const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    if (sign && days) date.setUTCDate(date.getUTCDate() + (sign === "-" ? -Number(days) : Number(days)));
+    return date.toISOString().slice(0, 10);
+  });
 }
 
 type Raw = Record<string, unknown>;
@@ -178,6 +253,65 @@ function stringList(raw: Raw, key: string, path: string): string[] {
   if (!Array.isArray(value) || value.some((v) => typeof v !== "string"))
     throw new BundleError(`${path}.${key}`, "must be a list of strings");
   return value as string[];
+}
+
+/** An optional list (absent = empty), for the version-2 content sections. */
+function optList<T>(raw: Raw, key: string, path: string, item: (entry: Raw, itemPath: string) => T): T[] {
+  if (raw[key] === undefined || raw[key] === null) return [];
+  return list(raw, key, path, item);
+}
+
+/** A `{name: string}` map; values must be non-blank strings. */
+function stringMap(raw: Raw, key: string, path: string): Record<string, string> {
+  const value = raw[key];
+  if (value === undefined || value === null) return {};
+  if (!isRecord(value)) throw new BundleError(`${path}.${key}`, "must be an object of property name to value");
+  for (const [name, entry] of Object.entries(value))
+    if (typeof entry !== "string" || entry.trim() === "") throw new BundleError(`${path}.${key}.${name}`, "must be a non-blank string");
+  return value as Record<string, string>;
+}
+
+/** Only the current-user marker may stand for a user (ADR-0024 Decision 4). */
+function checkUserValues(values: Record<string, string>, userProperties: Set<string>, path: string): void {
+  for (const [name, value] of Object.entries(values))
+    if (userProperties.has(name.toLowerCase()) && value.trim().toLowerCase() !== CURRENT_USER_MARKER)
+      throw new BundleError(`${path}.${name}`, `a user property may only default to "${CURRENT_USER_MARKER}" — identity does not travel`);
+}
+
+function parseFavorite(raw: Raw, path: string): BundleFavorite {
+  const favorite: BundleFavorite = {
+    name: str(raw, "name", path),
+    style: oneOf(raw, "style", path, CARD_VIEW_STYLES),
+    filters: raw.filters === undefined ? [] : stringList(raw, "filters", path),
+    columns: raw.columns === undefined ? [] : stringList(raw, "columns", path),
+    groupBy: optStr(raw, "groupBy", path) ?? "",
+    tabView: bool(raw, "tabView", path, false),
+    wipLimits: {},
+  };
+  const mql = optStr(raw, "mql", path);
+  if (mql !== undefined) favorite.mql = mql;
+  const limits = raw.wipLimits;
+  if (limits !== undefined && limits !== null) {
+    if (!isRecord(limits)) throw new BundleError(`${path}.wipLimits`, "must be an object of lane value to limit");
+    for (const [lane, limit] of Object.entries(limits)) {
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0)
+        throw new BundleError(`${path}.wipLimits.${lane}`, "must be a positive whole number");
+      favorite.wipLimits[lane] = limit;
+    }
+  }
+  return favorite;
+}
+
+function parseCard(raw: Raw, path: string): BundleCard {
+  const card: BundleCard = { name: str(raw, "name", path), cardType: str(raw, "cardType", path), values: stringMap(raw, "values", path) };
+  if (raw.number !== undefined && raw.number !== null) {
+    if (typeof raw.number !== "number" || !Number.isInteger(raw.number) || raw.number <= 0)
+      throw new BundleError(`${path}.number`, "must be a positive whole number");
+    card.number = raw.number;
+  }
+  const description = nullableStr(raw, "description", path);
+  if (description !== null) card.description = description;
+  return card;
 }
 
 function parseProperty(raw: Raw, path: string): BundleProperty {
@@ -264,11 +398,12 @@ export function parseBundle(text: string): CommandResult<ProjectBundle> {
   if (!isRecord(raw)) return reject("bundle", "must be a JSON object");
   try {
     if (raw.format !== BUNDLE_FORMAT) throw new BundleError("format", `must be "${BUNDLE_FORMAT}"`);
-    if (raw.version !== BUNDLE_VERSION) throw new BundleError("version", `must be ${BUNDLE_VERSION}`);
+    if (!(SUPPORTED_BUNDLE_VERSIONS as readonly unknown[]).includes(raw.version))
+      throw new BundleError("version", `must be one of ${SUPPORTED_BUNDLE_VERSIONS.join(", ")}`);
     if (!isRecord(raw.source)) throw new BundleError("source", "must be an object");
     const bundle: ProjectBundle = {
       format: BUNDLE_FORMAT,
-      version: BUNDLE_VERSION,
+      version: raw.version as ProjectBundle["version"],
       exportedAt: str(raw, "exportedAt", "bundle"),
       source: {
         name: str(raw.source, "name", "source"),
@@ -281,7 +416,17 @@ export function parseBundle(text: string): CommandResult<ProjectBundle> {
       aggregates: list(raw, "aggregates", "bundle", parseAggregate),
       transitions: list(raw, "transitions", "bundle", parseTransition),
       variables: list(raw, "variables", "bundle", parseVariable),
+      cardDefaults: optList(raw, "cardDefaults", "bundle", (entry, path) => ({
+        cardType: str(entry, "cardType", path),
+        values: stringMap(entry, "values", path),
+      })),
+      favorites: optList(raw, "favorites", "bundle", parseFavorite),
+      cards: optList(raw, "cards", "bundle", parseCard),
+      pages: optList(raw, "pages", "bundle", (entry, path) => ({ name: str(entry, "name", path), content: nullableStr(entry, "content", path) })),
     };
+    const userProperties = new Set(bundle.properties.filter((p) => p.kind === "user").map((p) => p.name.toLowerCase()));
+    bundle.cardDefaults.forEach((entry, index) => checkUserValues(entry.values, userProperties, `cardDefaults[${index}].values`));
+    bundle.cards.forEach((entry, index) => checkUserValues(entry.values, userProperties, `cards[${index}].values`));
     return { ok: true, value: bundle };
   } catch (error) {
     if (error instanceof BundleError) return reject("bundle", `${error.path.replace(/^bundle\./, "")} ${error.message}`);

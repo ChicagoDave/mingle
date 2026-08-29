@@ -4,8 +4,10 @@
  *
  * Purpose: gives the domain's LDAP strategy a directory to bind and
  * search against. Supports ldap:// and ldaps:// URLs (legacy
- * ldapusessl); StartTLS (legacy ldapusetls) is not offered — use
- * ldaps://. A refused bind is an answer (`false`); every other failure
+ * ldapusessl) and, since P-7, StartTLS on an ldap:// connection
+ * (legacy ldapusetls): the connection is upgraded before the first
+ * bind, verified against `tlsCaCert` when one is configured, else the
+ * system trust store. A refused bind is an answer (`false`); every other failure
  * (unreachable host, timeout, bad base DN) propagates, which the
  * strategy reports as a directory problem rather than bad credentials.
  *
@@ -25,7 +27,21 @@ function stringValues(value: unknown): string[] {
 
 /** Opens a connection for the configured directory URL. */
 export const openLdapDirectory: LdapDirectoryFactory = async (settings) => {
-  const client = new Client({ url: settings.url, timeout: 15_000, connectTimeout: 5_000 });
+  const tlsOptions = settings.tlsCaCert ? { ca: settings.tlsCaCert } : undefined;
+  // ldapts reads any constructor `tlsOptions` as "connect with TLS from the
+  // start" (LDAPS), so they go there only for ldaps:// URLs; for StartTLS
+  // the same options go to the upgrade instead.
+  const ldaps = /^ldaps:/i.test(settings.url);
+  const client = new Client({
+    url: settings.url,
+    timeout: 15_000,
+    connectTimeout: 5_000,
+    ...(ldaps && tlsOptions ? { tlsOptions } : {}),
+  });
+  // StartTLS upgrades the plain connection before any bind or search (P-7);
+  // a failed upgrade (refused by the server, untrusted certificate) is a
+  // transport failure, which the strategy reports as an unreachable directory.
+  if (settings.startTls && !ldaps) await client.startTLS(tlsOptions ?? {});
   const directory: LdapDirectory = {
     async bind(dn, password) {
       try {

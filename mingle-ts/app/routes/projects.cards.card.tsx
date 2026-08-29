@@ -65,7 +65,7 @@ import {
 } from "~/files/attachment-storage.server";
 import { addCardComment } from "~/domain/murmurs/commands.server";
 import { cardDependencies } from "~/domain/dependencies/read.server";
-import { commitLinksForCard } from "~/domain/integrations/read.server";
+import { commitLinksForCard, pullRequestLinksForCard } from "~/domain/integrations/read.server";
 import { cardDiscussion } from "~/domain/murmurs/read.server";
 import { MurmurBody } from "~/components/murmur-body";
 import { requireUserId } from "~/auth/session.server";
@@ -212,6 +212,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     dependencies: cardDependencies(db, project.id, card.number),
     // Phase 32: commits whose messages referenced this card.
     commits: commitLinksForCard(db, card.id, card.number),
+    pullRequests: pullRequestLinksForCard(db, card.id, card.number),
   };
 }
 
@@ -417,6 +418,7 @@ export default function CardPage() {
     discussion,
     dependencies,
     commits,
+    pullRequests,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
@@ -692,6 +694,29 @@ export default function CardPage() {
             <li key={commit.sha}>
               <a href={commit.url}>{commit.shortSha}</a> ({commit.repository}) by {commit.authorName} on{" "}
               {commit.committedAt.slice(0, 10)}: {commit.message.split("\n")[0]}
+              {commit.status ? (
+                <span className={`commit-status commit-status-${commit.status.state}`}>
+                  {" "}
+                  — {commit.status.context}: {commit.status.url ? <a href={commit.status.url}>{commit.status.state}</a> : commit.status.state}
+                  {commit.status.description ? ` (${commit.status.description})` : ""}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      <h2>Pull requests</h2>
+      {pullRequests.length === 0 ? (
+        <p>No pull requests reference this card.</p>
+      ) : (
+        <ul id="card-pull-requests">
+          {pullRequests.map((pr) => (
+            <li key={`${pr.repository}#${pr.number}`}>
+              <a href={pr.url}>
+                #{pr.number} {pr.title}
+              </a>{" "}
+              ({pr.repository}) — {pr.state}
+              {pr.authorLogin ? ` by ${pr.authorLogin}` : ""}, updated {pr.updatedAt.slice(0, 10)}
             </li>
           ))}
         </ul>

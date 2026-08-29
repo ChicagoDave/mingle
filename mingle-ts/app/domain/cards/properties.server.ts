@@ -46,7 +46,9 @@
  * and — for sibling Card Management commands that
  * set several properties in ONE card version (transitions.server.ts) —
  * `canonicalPropertyValue`, `samePropertyValue`, and
- * `appendPropertyValueChanges`. Those three keep this module the only
+ * `appendPropertyValueChanges` — plus `insertInitialPropertyValues`
+ * for CreateCard's version-1 write of a card type's defaults (P-2).
+ * Those keep this module the only
  * writer of `card_property_values`: callers validate through
  * `canonicalPropertyValue`, then hand the changes to
  * `appendPropertyValueChanges` inside their own transaction.
@@ -1038,6 +1040,34 @@ export function appendPropertyValueChanges(
     recomputeAggregatesFor(tx, projectId, treeAncestorCardIds(tx, projectId, holderNumbers));
   }
   return row;
+}
+
+/**
+ * Writes a NEW card's initial property values inside the creating
+ * command's transaction — its card type's defaults (P-2) — without
+ * appending a version: the caller inserts version 1 afterwards with a
+ * `cardPropertySnapshot` that now includes them, so a defaulted card
+ * has one version, as legacy's did. Recomputes the project's formula
+ * properties for the card so that snapshot carries derived values too.
+ * Values must already be canonical (`canonicalPropertyValue`); a null
+ * value writes nothing. Insert only — the card has no rows yet.
+ *
+ * @param tx - the creating command's transaction
+ * @param projectId - the card's project
+ * @param cardId - the just-inserted card
+ * @param changes - the canonical initial values, at most one per definition
+ */
+export function insertInitialPropertyValues(
+  tx: BetterSQLite3Database,
+  projectId: number,
+  cardId: number,
+  changes: PropertyValueChange[],
+): void {
+  for (const { definition, value } of changes) {
+    if (value === null) continue;
+    tx.insert(cardPropertyValues).values({ cardId, propertyDefinitionId: definition.id, value }).run();
+  }
+  recomputeCardFormulas(tx, projectId, cardId);
 }
 
 export interface DefineAggregatePropertyInput {

@@ -1,0 +1,586 @@
+/**
+ * Site chrome styles (P-16) — harvested from the legacy Mingle
+ * stylesheets under mingle/app/assets/stylesheets: base.scss (html
+ * elements, headings, forms, tables), application.scss (#doc, #bd,
+ * .main_inner, #flash, the success/error/question boxes, .clear_float),
+ * reset-fonts-grids.scss (#bd background, .page-content), common/
+ * _constants.scss (the colour palette, inlined as custom properties),
+ * common/_header.scss, common/_header_actions.scss, common/_header_pills.scss
+ * (#header-pills), tabs.scss (#hd-nav
+ * and the tab list) and footbar.scss (#ft). Class and id names are the
+ * legacy markup's so the shell reads as its legacy counterpart; image
+ * sprites and Font Awesome glyphs are approximated with flat colour.
+ *
+ * Owner context: application shell (presentation).
+ */
+
+:root {
+  --mingle-primary: #3fbeea;
+  --mingle-primary-active: #2b8cbc;
+  --mingle-secondary: #666;
+  --mingle-trace: #c3c3c3;
+  --mingle-subtle-trace: #e2e2e2;
+  --mingle-header-background: #eee;
+  --mingle-header-tab-hover: #f3f3f3;
+  --mingle-highlight: #ef5b6c;
+  --mingle-info-background: #ddebf3;
+  --mingle-warning-background: #ffc;
+}
+
+/* --- html elements (base.scss, application.scss body) --- */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #fff;
+  color: #333;
+  font-family: Helvetica, Arial, "Lucida Grande", sans-serif;
+  font-size: 12px;
+  font-weight: 300;
+  line-height: normal;
+}
+
+img {
+  border: 0;
+}
+
+a,
+a:visited {
+  color: var(--mingle-secondary);
+  text-decoration: none;
+}
+
+body,
+select,
+input,
+textarea {
+  font-size: 12px;
+}
+
+pre,
+code {
+  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+h1,
+h2,
+h3,
+#title {
+  font-weight: 300;
+}
+
+h1 {
+  color: var(--mingle-primary);
+  font-size: 21px;
+  margin: 10px 0;
+  padding: 0 0 10px 0;
+  border-bottom: 1px dashed #ccc;
+}
+
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #111;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 10px 0 5px 0;
+}
+
+h3 {
+  font-size: 16px;
+  margin: 10px 0 5px 0;
+}
+
+h4 {
+  font-size: 13px;
+  margin: 10px 0 5px 0;
+}
+
+p {
+  margin: 0;
+}
+
+/* --- forms (base.scss) --- */
+
+select {
+  padding: 2px;
+  margin: 1px 0;
+}
+
+input,
+select,
+button,
+textarea {
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="email"],
+input[type="password"],
+input[type="file"],
+textarea {
+  border: 1px solid #ccc;
+  padding: 4px;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #78d2f0;
+  background-color: #ecf4f9;
+  box-shadow: inset 0 0 3px #78d2f0;
+  outline: none;
+}
+
+input.readonly,
+input[readonly="readonly"] {
+  color: #666;
+  background: #ccc;
+}
+
+fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+label {
+  display: block;
+  padding-bottom: 5px;
+}
+
+/* --- tables (base.scss) --- */
+
+table {
+  margin: 0;
+  width: 100%;
+  font-size: 11px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 7px 10px;
+  color: #333;
+  vertical-align: top;
+}
+
+td {
+  border: 1px solid #ccc;
+  background-color: #fff;
+}
+
+th {
+  border: 1px solid #ccc;
+  background-color: #fff;
+  text-align: left;
+}
+
+td.number,
+th.number {
+  text-align: center;
+  font-weight: bold;
+  width: 2%;
+}
+
+table a {
+  text-decoration: underline;
+}
+
+/* --- page structure (application.scss, reset-fonts-grids.scss) --- */
+
+#doc {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#bd {
+  background-color: #f3f3f3;
+  padding-bottom: 36px;
+  flex: 1 0 auto;
+}
+
+.page-content {
+  width: 100%;
+  display: block;
+  margin-right: 0;
+}
+
+.main_inner {
+  padding: 10px 15px;
+  background-color: #fff;
+  border-right: 1px solid #d3d3d3;
+  min-height: 460px;
+}
+
+#content,
+.content {
+  margin-bottom: 10px;
+}
+
+.clearfix:after,
+.clear_float:after {
+  visibility: hidden;
+  display: block;
+  font-size: 0;
+  content: " ";
+  clear: both;
+}
+
+.hide {
+  display: none;
+}
+
+/* --- flash and information boxes (application.scss, common/_boxes.scss) --- */
+
+#flash a,
+#flash a:visited {
+  text-decoration: underline;
+}
+
+.success-box,
+.error-box,
+.question-box,
+.info-box,
+.warning-box {
+  padding: 10px 15px;
+  margin-bottom: 10px;
+  color: #333;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.success-box {
+  background-color: #e5eede;
+}
+
+.error-box {
+  background-color: #eccaca;
+}
+
+.question-box {
+  background-color: #ffe6b3;
+}
+
+.info-box {
+  background-color: var(--mingle-info-background);
+}
+
+.warning-box {
+  background-color: var(--mingle-warning-background);
+}
+
+.success-box h2,
+.error-box h2,
+.question-box h2,
+.info-box h2,
+.warning-box h2 {
+  margin: 5px 0;
+  padding: 0;
+}
+
+.success-box p,
+.error-box p,
+.question-box p,
+.info-box p,
+.warning-box p {
+  margin-top: 10px;
+  padding: 0;
+}
+
+.success-box p:first-child,
+.error-box p:first-child,
+.question-box p:first-child,
+.info-box p:first-child,
+.warning-box p:first-child {
+  margin-top: 0;
+}
+
+/* --- header (common/_header.scss) --- */
+
+#header {
+  color: var(--mingle-primary);
+  padding: 0;
+  position: relative;
+}
+
+#header a {
+  text-decoration: none;
+}
+
+#header #header_wrapper * {
+  box-sizing: border-box;
+}
+
+#header #title {
+  background-color: white;
+  border-bottom: 1px solid #f3f3f3;
+  width: auto;
+}
+
+#header #title .logo {
+  float: left;
+  height: 41px;
+  padding-right: 10px;
+  width: 120px;
+}
+
+#header #title .logo img {
+  height: 100%;
+}
+
+#title #project-list {
+  color: #cccccc;
+  display: inline;
+}
+
+#header .header-name {
+  color: var(--mingle-secondary);
+  float: left;
+  font-size: 19px;
+  font-weight: 300;
+  overflow: hidden;
+  padding: 9px 0 0 40px;
+  text-decoration: none;
+  vertical-align: top;
+}
+
+/* --- header actions (common/_header_actions.scss) --- */
+
+.header-actions {
+  float: right;
+  margin: 0;
+  padding: 0;
+}
+
+.header-actions ul.actions_list,
+.header-actions ul.project_actions {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.header-actions ul.actions_list li.action_item,
+.header-actions ul.project_actions li.project_action {
+  float: left;
+  padding: 0;
+  margin: 0;
+  display: inline;
+}
+
+.header-actions .current-user-actions {
+  display: inline-flex;
+  padding: 0;
+  margin: 0;
+}
+
+.header-actions .current-user-actions ul li {
+  border-right: 1px solid var(--mingle-subtle-trace);
+  line-height: 41px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.header-actions .current-user-actions ul li:first-child {
+  border-left: 1px solid var(--mingle-subtle-trace);
+}
+
+.header-actions .profile_utilities {
+  font-weight: 300;
+  margin: 1px 10px 0 10px;
+  padding-top: 6px;
+}
+
+.header-actions .profile_utilities ul,
+.header-actions .profile_utilities a {
+  font-size: 11px;
+  color: #000;
+  line-height: 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.header-actions .profile_utilities ul li {
+  border-left: 1px solid #666;
+  padding: 0 10px 0 10px;
+  display: inline;
+  margin: 0;
+  list-style: none;
+}
+
+.header-actions .profile_utilities ul li:first-child {
+  border: 0;
+  padding-left: 0;
+}
+
+.header-actions .profile_utilities ul.login-panel {
+  margin: 8px 0 0 10px;
+}
+
+.header-actions .profile_utilities .current-user span {
+  font-weight: bold;
+}
+
+/* --- top-level header pills (common/_header_pills.scss) --- */
+
+#header-pills {
+  padding: 4px 0 0;
+  background: var(--mingle-header-background);
+  height: 34px;
+  box-sizing: border-box;
+}
+
+#header-pills ul {
+  margin: 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+}
+
+#header-pills ul li.header-menu-pill {
+  float: left;
+  margin: 0 5px 0 0;
+  height: 30px;
+  padding: 2px;
+  box-sizing: border-box;
+}
+
+#header-pills ul li.header-menu-pill a {
+  color: var(--mingle-secondary);
+  display: block;
+  font-size: 12px;
+  line-height: 28px;
+  height: 28px;
+  padding: 0 15px;
+}
+
+#header-pills ul li.header-menu-pill:hover,
+#header-pills ul li.header-menu-pill.selected {
+  background-color: var(--mingle-secondary);
+}
+
+#header-pills ul li.header-menu-pill:hover a,
+#header-pills ul li.header-menu-pill.selected a {
+  color: #fff;
+}
+
+/* --- project tab bar (tabs.scss, layouts/_tabs.rhtml) --- */
+
+#hd-nav {
+  margin: 0;
+  padding: 0;
+  background-color: var(--mingle-header-background);
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+}
+
+#hd-nav .tab-nav {
+  flex-grow: 1;
+  width: calc(100% - 150px);
+}
+
+#hd-nav ul.sortable-tabs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+#hd-nav ul.sortable-tabs li {
+  margin: 5px 5px 0 0;
+  padding: 0 4px 0 0;
+  font-size: 12px;
+  height: 34px;
+  color: var(--mingle-secondary);
+}
+
+#hd-nav ul.sortable-tabs li:hover {
+  background-color: var(--mingle-header-tab-hover);
+}
+
+#hd-nav ul.sortable-tabs li a {
+  float: left;
+  text-decoration: none;
+  color: inherit;
+}
+
+#hd-nav ul.sortable-tabs li a[role="tab-name"] {
+  display: block;
+  max-width: 125px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 10px 10px 12px 15px;
+}
+
+#hd-nav ul.sortable-tabs li.current-menu-item {
+  background: white;
+  box-shadow: 0 3px 5px rgba(0, 0, 0, 0.3);
+}
+
+#hd-nav ul.sortable-tabs li.current-menu-item:hover {
+  background: white;
+}
+
+/* --- footbar (footbar.scss, layouts/_footbar.rhtml) --- */
+
+#ft {
+  background-color: rgba(51, 51, 51, 0.9);
+  border-top: 1px solid #555;
+  color: #bbb;
+  font-size: 11px;
+  height: 34px;
+  line-height: 34px;
+  margin: 0;
+  padding: 0;
+  z-index: 8000;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+#ft > * {
+  padding-right: 5px;
+}
+
+#ft li {
+  list-style: none;
+}
+
+#ft a {
+  color: #fff;
+}
+
+#ft #support {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+#ft #support li {
+  margin: 0;
+  padding: 0 10px;
+  list-style: none;
+  float: right;
+  border-left: 1px solid #555;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
+#ft #support a {
+  display: block;
+}

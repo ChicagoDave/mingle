@@ -10,7 +10,7 @@
  * ROWS are the domain layer's business; this module knows nothing
  * about cards or the database.
  *
- * Public interface: `sanitizeFileName`, `saveAttachmentFile`,
+ * Public interface: `attachmentsRoot`, `sanitizeFileName`, `saveAttachmentFile`,
  * `readAttachmentFile`, `deleteAttachmentFile`.
  *
  * Owner context: infrastructure (file storage adapter) for Card
@@ -27,7 +27,7 @@ import { randomBytes } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 
 /** The attachments root: env override, else beside the database file. */
-function attachmentsRoot(): string {
+export function attachmentsRoot(): string {
   if (process.env.ATTACHMENTS_DIR) return resolve(process.env.ATTACHMENTS_DIR);
   const databaseFile = resolve(process.env.DATABASE_FILE ?? "data/mingle.db");
   return join(dirname(databaseFile), "attachments");

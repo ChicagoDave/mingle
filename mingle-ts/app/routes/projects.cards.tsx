@@ -61,7 +61,7 @@ import {
   PrivilegeLevel,
   privilegeLevelFor,
 } from "~/domain/identity/authorization.server";
-import { FavoritesPanel, ViewTabs } from "~/components/favorites";
+import { FavoritesPanel } from "~/components/favorites";
 import {
   CARD_TYPE_COLUMN_NAME,
   filterOperatorLabel,
@@ -514,12 +514,6 @@ export default function ProjectCards() {
           · <Link to={`${base}/new`}>New card</Link>
         </p>
       </div>
-
-      <ViewTabs
-        identifier={project.identifier}
-        tabs={favorites.tabs}
-        currentFavoriteId={currentFavoriteId}
-      />
 
       <div id="card-list-page">
         <div id="content">

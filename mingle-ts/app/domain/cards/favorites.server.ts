@@ -14,17 +14,25 @@
  * Phase 9/10 read models before they are stored, so a saved favorite
  * always reopens to a renderable view — never to a filter error.
  *
+ * A team grid favorite may carry a WIP limit per lane (P-3, legacy
+ * `wip_limits` view params — count type only): `n / limit` on the
+ * wall's lane header, over-limit highlighted, never refused (legacy
+ * warned, it did not block a drop). Limits are keyed by the lane's
+ * stored value and cleared when a re-save changes the lane property.
+ *
  * Commands → events:
  *   SaveFavorite       → FavoriteSaved
  *   MakeFavoriteTab    → FavoritePromotedToTab
  *   RemoveFavoriteTab  → FavoriteDemotedFromTab
  *   DeleteFavorite     → FavoriteDeleted
+ *   SetLaneWipLimit    → FavoriteWipLimitSet
  *
  * Public interface: `saveFavorite`, `makeFavoriteTab`,
- * `removeFavoriteTab`, `deleteFavorite`, `listFavorites`,
- * `favoriteViewParams`, `favoriteHref`, `serializeFavorite`,
- * `findFavoriteByName`, and the `FavoriteViewParams` /
- * `ProjectFavorites` types.
+ * `removeFavoriteTab`, `deleteFavorite`, `setLaneWipLimit`,
+ * `listFavorites`, `favoriteViewParams`, `favoriteHref`,
+ * `serializeFavorite`, `findFavoriteByName`, `wipLimitsOf`,
+ * `wipLimitsFor`, and the `FavoriteViewParams` / `ProjectFavorites`
+ * / `WipLimits` types.
  *
  * Owner context: Card Management. Handlers take the Drizzle handle as a
  * parameter — this module holds no module-level infrastructure imports,
@@ -34,6 +42,8 @@ import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { favorites, type FavoriteRow } from "~/db/schema/favorites";
 import { projects } from "~/db/schema/projects";
+import { propertyDefinitions } from "~/db/schema/properties";
+import { canonicalPropertyValue } from "~/domain/cards/properties.server";
 import {
   CARD_VIEW_STYLES,
   type CardViewStyle,
@@ -76,6 +86,16 @@ export interface FavoriteIdInput {
   projectId: number;
   favoriteId: number;
   actorUserId: number;
+}
+
+/** Lane stored value → count limit, as stored in `favorites.wip_limits`. */
+export type WipLimits = Record<string, number>;
+
+export interface SetLaneWipLimitInput extends FavoriteIdInput {
+  /** The lane's stored value (an enumerated value, or a user id). */
+  laneValue: string;
+  /** A positive whole number, or null to remove the lane's limit. */
+  limit: number | null;
 }
 
 /** The favorites a viewer sees on a project's card views. */
@@ -204,13 +224,17 @@ export function saveFavorite(
 
   const userId = input.personal ? input.actorUserId : null;
   const existing = findFavoriteByName(db, input.projectId, name, userId);
+  const groupBy = params.value.groupBy === "" ? null : params.value.groupBy;
   const stored = {
     name,
     style: params.value.style,
     filters: JSON.stringify(params.value.filters),
     columns: JSON.stringify(params.value.columns),
-    groupBy: params.value.groupBy === "" ? null : params.value.groupBy,
+    groupBy,
     mql: params.value.mql === "" ? null : params.value.mql,
+    // Limits are keyed by the lane property's values: a re-save that
+    // changes the lane property (or the style) drops them (P-3).
+    ...(existing && (existing.groupBy !== groupBy || existing.style !== params.value.style) ? { wipLimits: "{}" } : {}),
   };
 
   return db.transaction((tx) => {
@@ -300,6 +324,97 @@ function setTabView(
       aggregateType: "Favorite",
       aggregateId: row.id,
       payload: { projectId: input.projectId, name: row.name },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: row };
+  });
+}
+
+/** Parses a favorite's stored WIP limits; a malformed column reads as none. */
+export function wipLimitsOf(favorite: FavoriteRow): WipLimits {
+  try {
+    const parsed: unknown = JSON.parse(favorite.wipLimits);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const limits: WipLimits = {};
+    for (const [lane, limit] of Object.entries(parsed as Record<string, unknown>))
+      if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) limits[lane] = limit;
+    return limits;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The WIP limits the wall shows for a favorite: only a team favorite
+ * of grid style in the project carries any; anything else is null,
+ * which also tells the grid not to offer editing.
+ */
+export function wipLimitsFor(
+  db: BetterSQLite3Database,
+  projectId: number,
+  favoriteId: number,
+): { favoriteId: number; limits: WipLimits } | null {
+  const favorite = findFavorite(db, projectId, favoriteId);
+  if (!favorite || favorite.userId !== null || favorite.style !== "grid" || favorite.groupBy === null) return null;
+  return { favoriteId: favorite.id, limits: wipLimitsOf(favorite) };
+}
+
+/**
+ * SetLaneWipLimit — sets or removes one lane's WIP limit on a team
+ * grid favorite.
+ *
+ * DOES: rewrites the favorite's `wip_limits` JSON with the lane's
+ * limit (or without the lane when clearing), bumps `updated_at`, and
+ * emits FavoriteWipLimitSet naming the favorite, lane and limit.
+ * REJECTS: unknown project or favorite; actor below full team member
+ * (the level that saves team favorites); a personal favorite; a list
+ * style or ungrouped favorite; the "(not set)" lane; a value the lane
+ * property does not hold (validated as a property value would be); a
+ * limit that is not a positive whole number.
+ *
+ * @returns the updated favorite row, or field errors
+ */
+export function setLaneWipLimit(
+  db: BetterSQLite3Database,
+  input: SetLaneWipLimitInput,
+): CommandResult<FavoriteRow> {
+  if (!projectExists(db, input.projectId)) return reject("project", "does not exist");
+  const denied = authorizeProjectAction(db, input.actorUserId, input.projectId, PrivilegeLevel.FULL_TEAM_MEMBER);
+  if (denied) return denied;
+  const favorite = findFavorite(db, input.projectId, input.favoriteId);
+  if (!favorite) return reject("favorite", "does not exist");
+  if (favorite.userId !== null) return reject("favorite", "is a personal favorite; WIP limits belong to team favorites");
+  if (favorite.style !== "grid" || favorite.groupBy === null)
+    return reject("favorite", "is not a grid grouped by a property, so it has no lanes to limit");
+  const laneValue = input.laneValue.trim();
+  if (laneValue === "") return reject("lane", "the (not set) lane cannot carry a WIP limit");
+  const definition = db
+    .select()
+    .from(propertyDefinitions)
+    .where(and(eq(propertyDefinitions.projectId, input.projectId), sql`lower(${propertyDefinitions.name}) = lower(${favorite.groupBy})`))
+    .get();
+  if (!definition) return reject("favorite", `is grouped by ${favorite.groupBy}, which is no longer a property of this project`);
+  const canonical = canonicalPropertyValue(db, input.projectId, definition, laneValue);
+  if (!canonical.ok) return reject("lane", Object.values(canonical.errors).flat().join("; "));
+  if (input.limit !== null && (!Number.isInteger(input.limit) || input.limit <= 0))
+    return reject("limit", "must be a positive whole number");
+
+  const limits = wipLimitsOf(favorite);
+  if (input.limit === null) delete limits[canonical.value];
+  else limits[canonical.value] = input.limit;
+
+  return db.transaction((tx) => {
+    const row = tx
+      .update(favorites)
+      .set({ wipLimits: JSON.stringify(limits), updatedAt: new Date() })
+      .where(eq(favorites.id, favorite.id))
+      .returning()
+      .get()!;
+    emitEvent(tx, {
+      type: "FavoriteWipLimitSet",
+      aggregateType: "Favorite",
+      aggregateId: row.id,
+      payload: { projectId: input.projectId, name: row.name, laneValue: canonical.value, limit: input.limit },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: row };

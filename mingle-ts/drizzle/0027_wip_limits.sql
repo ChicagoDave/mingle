@@ -1,0 +1,1 @@
+ALTER TABLE `favorites` ADD `wip_limits` text DEFAULT '{}' NOT NULL;

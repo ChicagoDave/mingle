@@ -10,6 +10,10 @@
  *   Authorization: Mingle-HMAC-SHA256 <login>:<sig>   (Phase 31)
  *     + X-Mingle-Date, per app/domain/identity/api-signing.server.ts
  *
+ * Since ADR-0021 an authenticated request to a project route is also
+ * judged against the project's access constraint by the caller's
+ * linked identities (Decision 5) — 403 with the constraint's message.
+ *
  * Public interface: `requireApiUser`, `AUTHENTICATE_HEADER`.
  *
  * Owner context: Public API (HTTP adapter) for Identity & Access.
@@ -20,6 +24,9 @@ import { sealer } from "~/auth/sealer.server";
 import { authenticateApiKey, verifySignedRequest } from "~/domain/identity/api-keys.server";
 import { bodySha256, canonicalRequest, DATE_HEADER, HMAC_SCHEME } from "~/domain/identity/api-signing.server";
 import { apiError } from "~/api/http.server";
+import { eq } from "drizzle-orm";
+import { projects } from "~/db/schema/projects";
+import { accessRefusal } from "~/domain/identity/access-constraint.server";
 
 /** The challenge sent with every 401. */
 export const AUTHENTICATE_HEADER = { "WWW-Authenticate": `Bearer realm="mingle-api", ${HMAC_SCHEME} realm="mingle-api"` };
@@ -39,6 +46,20 @@ const unauthenticated = (message: string) => apiError(401, message, undefined, A
  *   Cookies are never consulted.
  */
 export async function requireApiUser(request: Request): Promise<UserRow> {
+  const user = await authenticate(request);
+  const match = /^\/api\/v1\/projects\/([^/]+)(?:\/|$)/.exec(new URL(request.url).pathname);
+  if (match) {
+    const project = db.select({ id: projects.id }).from(projects).where(eq(projects.identifier, decodeURIComponent(match[1]))).get();
+    if (project) {
+      const refusal = accessRefusal(db, user.id, project.id, { via: "api" });
+      if (refusal) throw apiError(403, refusal, { authorization: [refusal] });
+    }
+  }
+  return user;
+}
+
+/** Resolves the Authorization header to a user, or throws the 401. */
+async function authenticate(request: Request): Promise<UserRow> {
   const header = request.headers.get("Authorization");
   if (!header)
     throw unauthenticated(`Authentication required: send 'Authorization: Bearer <key>' or '${HMAC_SCHEME} <login>:<signature>'`);

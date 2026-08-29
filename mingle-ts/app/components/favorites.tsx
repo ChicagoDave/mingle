@@ -1,58 +1,23 @@
 /**
- * Favorites UI — the project tab bar and the favorites sidebar panel
- * shared by the card list and grid views (Phase 11).
+ * Favorites UI — the favorites sidebar panel shared by the card list
+ * and grid views (Phase 11).
  *
- * Purpose: renders the legacy layouts/_tabs.rhtml tab bar ("All" plus
- * each team favorite promoted to a tab, current tab highlighted) and
- * the shared/_favorites.rhtml sidebar (team favorites, my favorites,
+ * Purpose: renders the shared/_favorites.rhtml sidebar (team favorites,
+ * my favorites,
  * and the "Add current view to favorites" save form, which posts to
  * the favorites route). Purely presentational: it receives the
  * serialized favorites list and the current view's parameters from a
  * route loader and never touches the database.
  *
- * Public interface: `ViewTabs`, `FavoritesPanel`, `CurrentViewParams`.
+ * Public interface: `FavoritesPanel`, `CurrentViewParams`. (The project
+ * tab bar the favorites promote into is rendered by the site chrome
+ * since P-16 — app/components/site-chrome.tsx.)
  *
  * Owner context: Card Management (presentation).
  */
 import { Form, Link } from "react-router";
 import type { CardViewStyle, FavoriteSummary } from "~/shared/wire-types";
 import "../styles/favorites.css";
-
-/** The project tab bar: "All" plus every tab favorite. */
-export function ViewTabs({
-  identifier,
-  tabs,
-  currentFavoriteId,
-}: {
-  identifier: string;
-  tabs: FavoriteSummary[];
-  currentFavoriteId: number | null;
-}) {
-  return (
-    <div id="hd-nav">
-      <div className="tab-nav">
-        <ul className="sortable-tabs">
-          <li className={currentFavoriteId === null ? "current-menu-item" : undefined}>
-            <Link to={`/projects/${identifier}/cards`} role="tab-name" id="tab_all_link">
-              All
-            </Link>
-          </li>
-          {tabs.map((tab) => (
-            <li
-              key={tab.id}
-              className={tab.id === currentFavoriteId ? "current-menu-item" : undefined}
-              id={`tab_${tab.name.toLowerCase().replace(/\s/g, "_")}`}
-            >
-              <Link to={tab.href} role="tab-name" title={tab.name}>
-                {tab.name}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
 
 /** The current view's parameters the save form carries as hidden fields. */
 export interface CurrentViewParams {

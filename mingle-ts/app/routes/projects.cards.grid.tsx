@@ -14,7 +14,10 @@
  * view (semantics reused from the Phase 9 read model); the filter
  * panel UI itself joins the grid with Phase 13's advanced filters.
  * Since Phase 11 the page carries the project tab bar and the
- * favorites panel; `favorite_id` marks the current favorite.
+ * favorites panel; `favorite_id` marks the current favorite. When that
+ * favorite is a team grid favorite, its lane WIP limits (P-3) render on
+ * the lane headers and the "wip" action sets them; a drop into a full
+ * lane is still accepted, as legacy's was.
  *
  *
  * Since Phase 15 a drop is applied through the auto-transition
@@ -37,7 +40,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { eq } from "drizzle-orm";
-import { data, Form, Link, useFetcher, useLoaderData } from "react-router";
+import { data, Form, Link, useActionData, useFetcher, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.cards.grid";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -49,12 +52,13 @@ import {
 } from "~/domain/cards/grid-view.server";
 import { applyCardPropertyValue } from "~/domain/cards/transition-workflows.server";
 import { todayIso } from "~/domain/cards/mql-evaluator.server";
-import { listFavorites, serializeFavorite } from "~/domain/cards/favorites.server";
+import { listFavorites, serializeFavorite, setLaneWipLimit, wipLimitsFor } from "~/domain/cards/favorites.server";
+import { LaneHeader } from "~/components/lane-header";
 import {
   PrivilegeLevel,
   privilegeLevelFor,
 } from "~/domain/identity/authorization.server";
-import { FavoritesPanel, ViewTabs } from "~/components/favorites";
+import { FavoritesPanel } from "~/components/favorites";
 import type { FieldErrors } from "~/shared/wire-types";
 import "../styles/card-grid.css";
 
@@ -87,6 +91,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .map((d) => d.name);
 
   const favoriteIdParam = url.searchParams.get("favorite_id");
+  const wip = favoriteIdParam === null ? null : wipLimitsFor(db, project.id, Number(favoriteIdParam));
   const all = listFavorites(db, project.id, userId);
   const serialize = (list: typeof all.tabs) =>
     list.map((f) => serializeFavorite(project.identifier, f));
@@ -97,6 +102,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     currentFavoriteId: favoriteIdParam === null ? null : Number(favoriteIdParam),
     canSaveFavorites:
       privilegeLevelFor(db, userId, project.id) >= PrivilegeLevel.FULL_TEAM_MEMBER,
+    wipFavoriteId: wip?.favoriteId ?? null,
+    wipLimits: wip?.limits ?? {},
+    canEditWipLimits:
+      wip !== null && privilegeLevelFor(db, userId, project.id) >= PrivilegeLevel.FULL_TEAM_MEMBER,
     groupByName,
     groupBy: view.groupBy ?? null,
     lanes: view.lanes,
@@ -122,7 +131,20 @@ export async function action({ request, params }: Route.ActionArgs) {
   if (!project) throw new Response("Not Found", { status: 404 });
 
   const form = await request.formData();
-  if (String(form.get("intent")) !== "drop")
+  const intent = String(form.get("intent"));
+  if (intent === "wip") {
+    const raw = String(form.get("limit") ?? "").trim();
+    const result = setLaneWipLimit(db, {
+      projectId: project.id,
+      favoriteId: Number(form.get("favoriteId") ?? 0),
+      laneValue: String(form.get("laneValue") ?? ""),
+      limit: raw === "" ? null : Number(raw),
+      actorUserId: userId,
+    });
+    if (!result.ok) return data({ ok: false as const, errors: result.errors satisfies FieldErrors }, { status: 400 });
+    return { ok: true as const };
+  }
+  if (intent !== "drop")
     throw new Response("Unknown intent", { status: 400 });
 
   const url = new URL(request.url);
@@ -278,8 +300,14 @@ export default function ProjectCardGrid() {
     favorites,
     currentFavoriteId,
     canSaveFavorites,
+    wipFavoriteId,
+    wipLimits,
+    canEditWipLimits,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const actionData = useActionData<typeof action>();
+  const wipError =
+    actionData && !actionData.ok ? Object.values(actionData.errors).flat().join(" ") : null;
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
@@ -326,12 +354,6 @@ export default function ProjectCardGrid() {
           · <Link to={`/projects/${project.identifier}/cards/new`}>New card</Link>
         </p>
       </div>
-
-      <ViewTabs
-        identifier={project.identifier}
-        tabs={favorites.tabs}
-        currentFavoriteId={currentFavoriteId}
-      />
 
       <div className="grid-actions">
         <Form method="get">
@@ -391,6 +413,7 @@ export default function ProjectCardGrid() {
       {(fetcherErrors ?? dropError) && (
         <p className="grid-errors">{fetcherErrors ?? dropError}</p>
       )}
+      {wipError && <p className="grid-errors">{wipError}</p>}
 
       {errors.length === 0 && (
         <div id="content-simple" className="grid-results">
@@ -400,18 +423,15 @@ export default function ProjectCardGrid() {
                 <thead>
                   <tr>
                     {lanes.map((lane) => (
-                      <th
+                      <LaneHeader
                         key={lane.value}
-                        className="lane_header"
-                        data-lane-value={lane.value}
-                      >
-                        <div className="header-title">
-                          {lane.title}
-                          <span className="lane-card-number aggregate">
-                            {lane.cards.length}
-                          </span>
-                        </div>
-                      </th>
+                        title={lane.title}
+                        laneValue={lane.value}
+                        count={lane.cards.length}
+                        limit={wipLimits[lane.value] ?? null}
+                        favoriteId={wipFavoriteId}
+                        editable={canEditWipLimits}
+                      />
                     ))}
                   </tr>
                 </thead>

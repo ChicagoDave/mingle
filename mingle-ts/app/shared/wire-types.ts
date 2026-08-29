@@ -139,6 +139,29 @@ export const DEFINABLE_PROPERTY_KINDS = PROPERTY_KINDS.filter(
   (kind) => kind !== "tree_relationship" && kind !== "aggregate",
 );
 
+/**
+ * The kinds a card type may carry a default value for (P-2): the
+ * directly settable ones. Formula, tree relationship and aggregate
+ * values are derived or structural and never defaulted.
+ */
+export const DEFAULTABLE_PROPERTY_KINDS = PROPERTY_KINDS.filter(
+  (kind) => kind !== "formula" && kind !== "tree_relationship" && kind !== "aggregate",
+);
+
+/**
+ * The marker a user-kind card default may hold in place of a user id
+ * (legacy PropertyType::UserType::CURRENT_USER): resolved to the actor
+ * creating the card.
+ */
+export const CURRENT_USER_MARKER = "(current user)";
+
+/** One card type's defaults as the settings page shows them. */
+export interface CardDefaultsView {
+  cardTypeId: number;
+  /** propertyDefinitionId → stored value (canonical, or the current-user marker). */
+  values: Record<string, string>;
+}
+
 /** One of PROPERTY_KINDS. */
 export type PropertyKind = (typeof PROPERTY_KINDS)[number];
 
@@ -398,6 +421,32 @@ export type ObjectiveStatus = (typeof OBJECTIVE_STATUSES)[number];
 // and the api adapter (app/api/*) produce them. Dates are ISO-8601 strings.
 // ---------------------------------------------------------------------------
 
+/**
+ * The ways a session can be opened (ADR-0021). Site-wide configuration
+ * decides which are enabled; a project may constrain access to a
+ * subset of them (`projects.permitted_strategy_kinds`, empty = none).
+ */
+export const STRATEGY_KINDS = ["password", "ldap", "oidc", "saml"] as const;
+export type StrategyKind = (typeof STRATEGY_KINDS)[number];
+export const STRATEGY_KIND_LABELS: Record<StrategyKind, string> = {
+  password: "Mingle password",
+  ldap: "LDAP",
+  oidc: "single sign-on (OpenID Connect)",
+  saml: "SAML",
+};
+
+/**
+ * Every collection response (P-1). `items` is one page in the
+ * collection's order; `nextCursor` is the opaque token to send back as
+ * `?cursor=` for the next page, or null on the last page. Pages are
+ * keyset-cursor based — an insert between two requests neither shifts
+ * nor repeats items. `?limit=` bounds the page (default 50, max 200).
+ */
+export interface ApiPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
 /** Every non-2xx API response body. `errors` carries command rejections. */
 export interface ApiErrorBody {
   error: string;
@@ -534,6 +583,112 @@ export interface ApiTransitionExecution {
   changedProperties: string[];
 }
 
+/** POST /api/v1/projects/:identifier/card_types. */
+export interface ApiDefineCardTypeBody {
+  name: string;
+}
+
+/**
+ * One prerequisite of a transition being defined. `value: null` is
+ * the nil-valued HasSpecificValue — the card must have the property
+ * UNSET (ADR-0010: null crosses the wire as JSON null, never ""). `set:
+ * true` requires any value (HasSetValue).
+ */
+export type ApiTransitionPrerequisiteBody =
+  | { property: string; value: string | null }
+  | { property: string; set: true };
+
+/**
+ * One action of a transition being defined: `value` sets the property
+ * (null clears it); `input` asks the executing user for it instead.
+ */
+export interface ApiTransitionActionBody {
+  property: string;
+  value?: string | null;
+  input?: "required" | "optional";
+}
+
+/**
+ * POST /api/v1/projects/:identifier/transitions — the same definition
+ * the transitions page posts (DefineTransition). Editing is
+ * delete-and-recreate (ADR-0007). `usedBy` restricts who may execute
+ * it: logins and/or group names; absent means every team member.
+ */
+export interface ApiDefineTransitionBody {
+  name: string;
+  cardType?: string | null;
+  prerequisites?: ApiTransitionPrerequisiteBody[];
+  actions: ApiTransitionActionBody[];
+  usedBy?: { users?: string[]; groups?: string[] };
+}
+
+/** A wiki page as the API presents it. `content` is the stored, sanitized HTML (ADR-0011). */
+export interface ApiWikiPage {
+  identifier: string;
+  name: string;
+  content: string | null;
+  version: number;
+  createdBy: string;
+  modifiedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** POST /api/v1/projects/:identifier/pages. */
+export interface ApiCreateWikiPageBody {
+  name: string;
+  content?: string | null;
+}
+
+/**
+ * A murmur as the API presents it: the body as typed (plain text),
+ * the author's login, and the facts resolved when it was posted
+ * (ADR-0017) — the logins it mentioned and the cards it referenced.
+ */
+export interface ApiMurmur {
+  id: number;
+  body: string;
+  author: string;
+  authorName: string;
+  /** The card this murmur comments on, when it is a card comment. */
+  cardNumber: number | null;
+  mentions: string[];
+  cards: number[];
+  createdAt: string;
+}
+
+/** POST /api/v1/projects/:identifier/murmurs. */
+export interface ApiPostMurmurBody {
+  body: string;
+}
+
+/** A card attachment as the API presents it; `url` serves the bytes. */
+export interface ApiAttachment {
+  id: number;
+  fileName: string;
+  contentType: string;
+  size: number;
+  cardVersion: number;
+  uploadedBy: string;
+  createdAt: string;
+  url: string;
+}
+
+/** A schedule as /admin/schedules shows it (ADR-0023); instants are ISO UTC, formatted in the viewer's zone by the page. */
+export interface ScheduleView {
+  id: number;
+  key: string;
+  name: string;
+  jobType: string;
+  cron: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastOutcome: string | null;
+  lastError: string | null;
+  lastFinishedAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Program timeline (Phase 26) — legacy Plan::Constants. Crosses the wire
 // in the objective forms' row selectors, so both sides import it here.
@@ -575,7 +730,7 @@ export function formatColumnTarget(target: ColumnTarget): string {
 // ---------------------------------------------------------------------------
 
 /** External authentication sources a site can enable. */
-export const AUTH_SOURCE_KINDS = ["ldap", "oidc"] as const;
+export const AUTH_SOURCE_KINDS = ["ldap", "oidc", "saml"] as const;
 
 /** One of `AUTH_SOURCE_KINDS`. */
 export type AuthSourceKind = (typeof AUTH_SOURCE_KINDS)[number];
@@ -603,6 +758,16 @@ export interface LdapSettingsView {
   groupAttribute: string;
   /** Create Mingle accounts on first successful sign-in (legacy auto_enroll). */
   autoEnroll: boolean;
+  /** Upgrade an ldap:// connection with StartTLS before binding (legacy ldapusetls; P-7). */
+  startTls: boolean;
+  /** PEM CA certificate(s) the directory's TLS certificate must chain to; blank uses the system store. */
+  tlsCaCert: string;
+  /**
+   * LDAP group → Mingle group mappings (P-6), one per line:
+   * `<group DN> => <project identifier>/<group name>`. Reconciled on
+   * every LDAP sign-in.
+   */
+  groupMappings: string;
 }
 
 /** OIDC settings as the admin page shows them. */
@@ -619,10 +784,37 @@ export interface OidcSettingsView {
   autoEnroll: boolean;
 }
 
+/**
+ * SAML 2.0 settings as the authentication page shows them (P-9). The
+ * service provider is this site (SP-initiated, HTTP-POST binding);
+ * nothing here is secret — the IdP's signing certificate is public.
+ */
+export interface SamlSettingsView {
+  enabled: boolean;
+  /** Button label on the sign-in page. */
+  displayName: string;
+  /** The IdP's single sign-on URL (HTTP-Redirect binding). */
+  entryPoint: string;
+  /** The IdP's entity id; when set, a response from another issuer is refused. */
+  idpIssuer: string;
+  /** The IdP's X.509 signing certificate, PEM or bare base64. */
+  idpCert: string;
+  /** This site's entity id (the Audience the IdP must name); defaults to the site URL. */
+  spEntityId: string;
+  /** Assertion attribute holding the Mingle login; blank uses the NameID. */
+  loginAttribute: string;
+  /** Assertion attribute holding the display name; blank uses the login. */
+  nameAttribute: string;
+  /** Assertion attribute holding the email; blank leaves it unset. */
+  emailAttribute: string;
+  autoEnroll: boolean;
+}
+
 /** The whole authentication page. */
 export interface AuthenticationView {
   ldap: LdapSettingsView;
   oidc: OidcSettingsView;
+  saml: SamlSettingsView;
 }
 
 // ---------------------------------------------------------------------------
@@ -631,21 +823,85 @@ export interface AuthenticationView {
 // cross the wire outbound.
 // ---------------------------------------------------------------------------
 
-/** The project's Slack notifier as the integrations page shows it. */
-export interface SlackIntegrationView {
-  configured: boolean;
-  enabled: boolean;
+/**
+ * The history event types a Slack route can name (P-10): the feed's
+ * kind and action, joined by a dot. Only combinations the history
+ * projection produces are listed.
+ */
+export const SLACK_EVENT_TYPES = [
+  "card.created",
+  "card.changed",
+  "card.commented",
+  "card.deleted",
+  "page.created",
+  "page.changed",
+  "page.deleted",
+  "murmur.murmured",
+  "dependency.created",
+  "dependency.changed",
+  "dependency.deleted",
+] as const;
+export type SlackEventType = (typeof SLACK_EVENT_TYPES)[number];
+export const SLACK_EVENT_TYPE_LABELS: Record<SlackEventType, string> = {
+  "card.created": "Card created",
+  "card.changed": "Card changed",
+  "card.commented": "Card commented on",
+  "card.deleted": "Card deleted",
+  "page.created": "Page created",
+  "page.changed": "Page changed",
+  "page.deleted": "Page deleted",
+  "murmur.murmured": "Murmur posted",
+  "dependency.created": "Dependency raised",
+  "dependency.changed": "Dependency changed",
+  "dependency.deleted": "Dependency deleted",
+};
+
+/** Where an event type goes: a webhook id, the project's default webhook, or nowhere. */
+export type SlackRouteTarget = number | "default" | "suppressed";
+
+/** One incoming webhook of a project as the integrations page shows it (the URL never crosses the wire). */
+export interface SlackWebhookView {
+  id: number;
   channelLabel: string;
+  enabled: boolean;
+  isDefault: boolean;
   lastDeliveredAt: string | null;
   lastError: string | null;
 }
 
-/** One GitHub repository allowed to push to the project. */
+/** The project's Slack notifier as the integrations page shows it: its webhooks and its event routing. */
+export interface SlackIntegrationView {
+  configured: boolean;
+  webhooks: SlackWebhookView[];
+  routes: Record<SlackEventType, SlackRouteTarget>;
+}
+
+/** The SCM hosts whose webhooks a project can receive (P-12). */
+export const SCM_PROVIDERS = ["github", "gitlab", "bitbucket"] as const;
+export type ScmProvider = (typeof SCM_PROVIDERS)[number];
+export const SCM_PROVIDER_LABELS: Record<ScmProvider, string> = {
+  github: "GitHub",
+  gitlab: "GitLab",
+  bitbucket: "Bitbucket",
+};
+
+/** One repository registered to push to the project, on one SCM host. */
 export interface GithubIntegrationView {
   id: number;
+  provider: ScmProvider;
   repository: string;
   enabled: boolean;
   lastReceivedAt: string | null;
+}
+
+/** The latest commit status GitHub reported for a linked commit (P-11). */
+export interface CommitStatusView {
+  /** "success", "failure", "error", or "pending". */
+  state: string;
+  context: string;
+  description: string;
+  url: string | null;
+  reportedAt: string;
 }
 
 /** A commit linked to a card by a `#123` reference in its message. */
@@ -659,4 +915,58 @@ export interface CommitLinkView {
   committedAt: string;
   /** The card the link is on — for the project-wide recent list. */
   cardNumber: number;
+  status: CommitStatusView | null;
+}
+
+/** A pull request linked to a card by a `#123` reference (P-11). */
+export interface PullRequestLinkView {
+  number: number;
+  title: string;
+  url: string;
+  repository: string;
+  state: string;
+  authorLogin: string | null;
+  updatedAt: string;
+  cardNumber: number;
+}
+
+/**
+ * Site chrome (P-16) — what the root loader hands the application
+ * shell: the signed-in user, the selected project, its display tabs,
+ * and whether the sign-in page is rendering.
+ */
+
+/** The signed-in user as the header shows them. */
+export interface SiteUser {
+  id: number;
+  name: string;
+  login: string;
+  admin: boolean;
+}
+
+/** The project the current URL is inside, if any. */
+export interface SiteProject {
+  name: string;
+  identifier: string;
+}
+
+/**
+ * One project tab. `kind` reproduces the legacy tab's `image_name`
+ * (the class that picks its icon) and `htmlId` its `html_id`.
+ */
+export interface SiteTab {
+  htmlId: string;
+  name: string;
+  href: string;
+  kind: "overview" | "list" | "grid" | "dependencies" | "all" | "history";
+  current: boolean;
+}
+
+/** Everything the shell renders from. */
+export interface SiteContext {
+  user: SiteUser | null;
+  project: SiteProject | null;
+  tabs: SiteTab[];
+  /** Legacy `rendering_login?` — the sign-in page has no header. */
+  renderingLogin: boolean;
 }

@@ -1,0 +1,61 @@
+/**
+ * Project list styles (P-17) — harvested from the legacy
+ * application.scss project-list section (`.project` styled box,
+ * `.project-icon-holder`, `.project-description` with its light h2/p)
+ * and projects.scss (`.project-description a.link-with-icon`). The
+ * uploaded project icon is replaced by the project's initial.
+ *
+ * Owner context: Card Management (presentation).
+ */
+
+.projects_list .project {
+  padding: 10px 0;
+  margin-bottom: 10px;
+  border-bottom: 1px dotted #ccc;
+  overflow: hidden;
+}
+
+.project-icon-holder {
+  height: 58px;
+  width: 58px;
+  float: left;
+  margin: 0 15px 15px 0;
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+  background-color: var(--mingle-primary);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 300;
+  line-height: 56px;
+  text-align: center;
+}
+
+.project-description {
+  margin-left: 80px;
+}
+
+.project-description h2,
+.project-description p {
+  font-weight: 300;
+}
+
+.project-description h2 {
+  margin-top: 0;
+}
+
+.project-description h2 a {
+  color: var(--mingle-primary);
+}
+
+.project-description p {
+  color: inherit;
+  margin: 10px 0;
+  font-size: 14px;
+}
+
+.project-description a.link-with-icon {
+  display: inline-block;
+  padding: 2px 2px 2px 0;
+  margin: 5px 10px 0 0;
+  color: var(--mingle-secondary);
+}

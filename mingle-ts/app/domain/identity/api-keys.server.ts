@@ -18,7 +18,7 @@
  * signing secret is sealed at rest (the server must read it back to
  * verify signatures), and both are shown once.
  *
- * Public interface: `generateApiKey`, `revokeApiKey`,
+ * Public interface: `rotateSigningSecret`, `SIGNING_SECRET_OVERLAP_MS`, `generateApiKey`, `revokeApiKey`,
  * `authenticateApiKey`, `verifySignedRequest`, `listApiKeys`,
  * `API_KEY_PREFIX`.
  *
@@ -122,6 +122,77 @@ export function generateApiKey(
   });
 }
 
+/** How long a rotated-out signing secret keeps verifying requests. */
+export const SIGNING_SECRET_OVERLAP_MS = 24 * 60 * 60 * 1000;
+
+export interface RotateSigningSecretInput {
+  apiKeyId: number;
+  /** The user asking — must own the key. */
+  actorUserId: number;
+  /** The rotation instant; defaults to now. Tests pin it. */
+  now?: Date;
+}
+
+/** What RotateSigningSecret hands back — the only place the new plaintext exists. */
+export interface RotatedSigningSecret {
+  /** The new HMAC signing secret; show it once and discard it. */
+  signingSecret: string;
+  /** When requests signed with the previous secret stop being accepted. */
+  previousSecretExpiresAt: Date;
+  row: ApiKeyRow;
+}
+
+/**
+ * RotateSigningSecret — replaces a key's HMAC signing secret with an
+ * overlap window (P-8).
+ *
+ * DOES: seals a freshly generated 256-bit secret into
+ * `signing_secret_sealed`, moves the secret it replaces into
+ * `previous_signing_secret_sealed` with `previous_secret_expires_at`
+ * set to `now + SIGNING_SECRET_OVERLAP_MS`, and appends an
+ * ApiKeySigningSecretRotated event carrying the key id and the expiry
+ * (never a secret), in one transaction. The bearer key itself is
+ * unchanged. A second rotation inside the window replaces the previous
+ * secret outright — only one old secret is ever accepted.
+ * REJECTS: unknown or revoked key; an actor who is not the key's owner
+ * (rotation is the owner's act — a site admin generates or revokes
+ * keys but never learns a secret).
+ *
+ * @returns the new plaintext secret, the window's end, and the row, or field errors
+ */
+export function rotateSigningSecret(
+  db: BetterSQLite3Database,
+  sealer: Sealer,
+  input: RotateSigningSecretInput,
+): CommandResult<RotatedSigningSecret> {
+  const key = db.select().from(apiKeys).where(eq(apiKeys.id, input.apiKeyId)).get();
+  if (!key || key.revokedAt) return reject("apiKey", "does not exist");
+  if (key.userId !== input.actorUserId) return reject("authorization", "only the key's owner may rotate its signing secret");
+  const now = input.now ?? new Date();
+  const signingSecret = randomBytes(32).toString("base64url");
+  const previousSecretExpiresAt = new Date(now.getTime() + SIGNING_SECRET_OVERLAP_MS);
+  return db.transaction((tx) => {
+    const row = tx
+      .update(apiKeys)
+      .set({
+        signingSecretSealed: sealer.seal(signingSecret),
+        previousSigningSecretSealed: key.signingSecretSealed,
+        previousSecretExpiresAt: key.signingSecretSealed ? previousSecretExpiresAt : null,
+      })
+      .where(eq(apiKeys.id, key.id))
+      .returning()
+      .get();
+    emitEvent(tx, {
+      type: "ApiKeySigningSecretRotated",
+      aggregateType: "User",
+      aggregateId: key.userId,
+      payload: { apiKeyId: key.id, keyPrefix: key.keyPrefix, previousSecretExpiresAt: previousSecretExpiresAt.toISOString() },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: { signingSecret, previousSecretExpiresAt, row } } as CommandResult<RotatedSigningSecret>;
+  });
+}
+
 export interface RevokeApiKeyInput {
   apiKeyId: number;
   /** The user asking — the key's owner, or a site admin. */
@@ -219,8 +290,9 @@ export interface VerifySignedRequestInput {
  * @returns the user, or null when the date is unparseable or outside
  *   ±15 minutes of `now`, the login is unknown or deactivated, or no
  *   live key of that user signs the canonical string to the presented
- *   signature. Every live key with a signing secret is tried, in
- *   timing-safe comparisons.
+ *   signature. Every live key with a signing secret is tried — its
+ *   current secret and, until `previous_secret_expires_at`, the secret
+ *   a rotation replaced (P-8) — in timing-safe comparisons.
  */
 export function verifySignedRequest(
   db: BetterSQLite3Database,
@@ -237,17 +309,24 @@ export function verifySignedRequest(
     .from(apiKeys)
     .where(and(eq(apiKeys.userId, user.id), isNull(apiKeys.revokedAt)))
     .all();
+  const now = (input.now ?? new Date()).getTime();
   for (const key of keys) {
-    if (!key.signingSecretSealed) continue;
-    let secret: string;
-    try {
-      secret = sealer.open(key.signingSecretSealed);
-    } catch {
-      continue;
-    }
-    if (signaturesMatch(signCanonical(secret, input.canonical), input.signature)) {
-      db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id)).run();
-      return user;
+    // The current secret, then — inside the P-8 overlap window — the one it replaced.
+    const candidates = [key.signingSecretSealed];
+    if (key.previousSigningSecretSealed && key.previousSecretExpiresAt && key.previousSecretExpiresAt.getTime() > now)
+      candidates.push(key.previousSigningSecretSealed);
+    for (const sealed of candidates) {
+      if (!sealed) continue;
+      let secret: string;
+      try {
+        secret = sealer.open(sealed);
+      } catch {
+        continue;
+      }
+      if (signaturesMatch(signCanonical(secret, input.canonical), input.signature)) {
+        db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id)).run();
+        return user;
+      }
     }
   }
   return null;
@@ -259,6 +338,8 @@ export interface ApiKeySummary {
   keyPrefix: string;
   createdAt: Date;
   lastUsedAt: Date | null;
+  /** Until when the secret replaced by the last rotation still verifies; null when none is in its window. */
+  previousSecretExpiresAt: Date | null;
 }
 
 /**
@@ -274,9 +355,15 @@ export function listApiKeys(db: BetterSQLite3Database, userId: number): ApiKeySu
       keyPrefix: apiKeys.keyPrefix,
       createdAt: apiKeys.createdAt,
       lastUsedAt: apiKeys.lastUsedAt,
+      previousSecretExpiresAt: apiKeys.previousSecretExpiresAt,
     })
     .from(apiKeys)
     .where(and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt)))
     .orderBy(desc(apiKeys.createdAt), desc(apiKeys.id))
-    .all();
+    .all()
+    .map((row) => ({
+      ...row,
+      previousSecretExpiresAt:
+        row.previousSecretExpiresAt && row.previousSecretExpiresAt.getTime() > Date.now() ? row.previousSecretExpiresAt : null,
+    }));
 }

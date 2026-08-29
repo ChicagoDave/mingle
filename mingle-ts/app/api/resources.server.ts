@@ -13,15 +13,21 @@
  * `listCardTypes`, `cardTypeResource`, `findCardTypeByName`,
  * `listPropertyDefinitions`, `propertyDefinitionResources`,
  * `findPropertyDefinitionByName`, `cardPresenter`, `userIdForLogin`,
- * `transitionResources`, `availableTransitionResources`.
+ * `transitionResources`, `availableTransitionResources`,
+ * `wikiPagePresenter`, `listMurmurRows`, `murmurPresenter`,
+ * `attachmentPresenter` (Phase 5).
  *
  * Owner context: Public API (HTTP adapter). Reads only; every write
  * goes through the domain commands.
  */
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { cardTypes, cards, type CardRow, type CardTypeRow } from "~/db/schema/cards";
 import { users } from "~/db/schema/identity";
+import { attachments, type AttachmentRow } from "~/db/schema/card-content";
+import { cardMurmurLinks, murmurMentions, murmurs } from "~/db/schema/murmurs";
+import type { PageRow } from "~/db/schema/pages";
+import { pageIdentifier } from "~/domain/pages/naming.server";
 import { projects, type ProjectRow } from "~/db/schema/projects";
 import { enumerationValues, propertyDefinitions, type PropertyDefinitionRow } from "~/db/schema/properties";
 import { cardPropertySnapshot } from "~/domain/cards/properties.server";
@@ -33,12 +39,15 @@ import {
   loadTransitions,
 } from "~/domain/cards/transitions.server";
 import type {
+  ApiAttachment,
   ApiAvailableTransition,
   ApiCard,
   ApiCardType,
+  ApiMurmur,
   ApiProject,
   ApiPropertyDefinition,
   ApiTransition,
+  ApiWikiPage,
   PropertyKind,
 } from "~/shared/wire-types";
 import { apiError } from "~/api/http.server";
@@ -255,4 +264,143 @@ export function availableTransitionResources(
       required: input.required,
     })),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 (P-3): wiki pages, murmurs, attachments
+// ---------------------------------------------------------------------------
+
+/** A per-presenter cache of user ids to logins ("?" for a vanished user). */
+function loginResolver(db: BetterSQLite3Database): (userId: number) => string {
+  const cache = new Map<number, string>();
+  return (userId) => {
+    const cached = cache.get(userId);
+    if (cached !== undefined) return cached;
+    const login = db.select({ login: users.login }).from(users).where(eq(users.id, userId)).get()?.login ?? "?";
+    cache.set(userId, login);
+    return login;
+  };
+}
+
+/**
+ * Builds a presenter for wiki pages: the stored (sanitized) body, the
+ * URL identifier derived from the name, and author logins.
+ *
+ * @param db - the Drizzle handle
+ */
+export function wikiPagePresenter(db: BetterSQLite3Database): (page: PageRow) => ApiWikiPage {
+  const loginOf = loginResolver(db);
+  return (page) => ({
+    identifier: pageIdentifier(page.name),
+    name: page.name,
+    content: page.content,
+    version: page.version,
+    createdBy: loginOf(page.createdByUserId),
+    modifiedBy: loginOf(page.modifiedByUserId),
+    createdAt: page.createdAt.toISOString(),
+    updatedAt: page.updatedAt.toISOString(),
+  });
+}
+
+/** One murmur row with its author, as the API lists them. */
+export interface MurmurListRow {
+  id: number;
+  body: string;
+  authorLogin: string | null;
+  authorName: string | null;
+  originCardId: number | null;
+  createdAt: Date;
+}
+
+/**
+ * The project's murmurs newest first, or the one with `id`.
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the project
+ * @param id - when given, only that murmur (still scoped to the project)
+ */
+export function listMurmurRows(db: BetterSQLite3Database, projectId: number, id?: number): MurmurListRow[] {
+  return db
+    .select({
+      id: murmurs.id,
+      body: murmurs.body,
+      authorLogin: users.login,
+      authorName: users.name,
+      originCardId: murmurs.originCardId,
+      createdAt: murmurs.createdAt,
+    })
+    .from(murmurs)
+    .leftJoin(users, eq(users.id, murmurs.authorUserId))
+    .where(id === undefined ? eq(murmurs.projectId, projectId) : and(eq(murmurs.projectId, projectId), eq(murmurs.id, id)))
+    .orderBy(desc(murmurs.id))
+    .all();
+}
+
+/**
+ * Builds a presenter for murmurs: the body as typed plus the mentions
+ * and card links resolved when it was posted (ADR-0017 — read from
+ * the stored rows, never re-derived from the text).
+ *
+ * @param db - the Drizzle handle
+ * @param projectId - the murmurs' project (card numbers resolve within it)
+ */
+export function murmurPresenter(db: BetterSQLite3Database, projectId: number): (row: MurmurListRow) => ApiMurmur {
+  return (row) => {
+    const mentions = db
+      .select({ login: users.login })
+      .from(murmurMentions)
+      .innerJoin(users, eq(users.id, murmurMentions.userId))
+      .where(eq(murmurMentions.murmurId, row.id))
+      .orderBy(asc(users.login))
+      .all()
+      .map((mention) => mention.login);
+    const linked = db
+      .select({ number: cards.number })
+      .from(cardMurmurLinks)
+      .innerJoin(cards, eq(cards.id, cardMurmurLinks.cardId))
+      .where(and(eq(cardMurmurLinks.murmurId, row.id), eq(cards.projectId, projectId)))
+      .orderBy(asc(cards.number))
+      .all()
+      .map((link) => link.number);
+    const origin =
+      row.originCardId === null
+        ? null
+        : (db.select({ number: cards.number }).from(cards).where(eq(cards.id, row.originCardId)).get()?.number ?? null);
+    return {
+      id: row.id,
+      body: row.body,
+      author: row.authorLogin ?? "?",
+      authorName: row.authorName ?? "?",
+      cardNumber: origin,
+      mentions: [...new Set(mentions)],
+      cards: linked,
+      createdAt: row.createdAt.toISOString(),
+    };
+  };
+}
+
+/**
+ * Builds a presenter for a card's attachments, with the API URL that
+ * serves each one's bytes.
+ *
+ * @param db - the Drizzle handle
+ * @param projectIdentifier - the project (for the URL)
+ * @param cardNumber - the card (for the URL)
+ */
+export function attachmentPresenter(
+  db: BetterSQLite3Database,
+  projectIdentifier: string,
+  cardNumber: number,
+): (row: AttachmentRow) => ApiAttachment {
+  const loginOf = loginResolver(db);
+  return (row) => ({
+    id: row.id,
+    fileName: row.fileName,
+    contentType: row.contentType,
+    size: row.size,
+    cardVersion: row.cardVersion,
+    uploadedBy: loginOf(row.uploadedByUserId),
+    createdAt: row.createdAt.toISOString(),
+    url: `/api/v1/projects/${projectIdentifier}/cards/${cardNumber}/attachments/${row.id}`,
+  });
 }

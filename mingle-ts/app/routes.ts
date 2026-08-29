@@ -10,13 +10,18 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 export default [
   index("routes/home.tsx"),
   route("healthz", "routes/healthz.ts"),
+  route("metrics", "routes/metrics.ts"),
   route("register", "routes/register.tsx"),
   route("login", "routes/login.tsx"),
   route("logout", "routes/logout.ts"),
   route("profile", "routes/profile.tsx"),
   route("auth/oidc", "routes/auth.oidc.ts"),
   route("auth/oidc/callback", "routes/auth.oidc.callback.ts"),
+  route("auth/saml", "routes/auth.saml.ts"),
+  route("auth/saml/callback", "routes/auth.saml.callback.ts"),
+  route("auth/saml/metadata", "routes/auth.saml.metadata.ts"),
   route("admin/authentication", "routes/admin.authentication.tsx"),
+  route("admin/schedules", "routes/admin.schedules.tsx"),
   route("projects", "routes/projects.tsx"),
   route("projects/new", "routes/projects.new.tsx"),
   route("projects/import", "routes/projects.import.tsx"),
@@ -39,6 +44,8 @@ export default [
   route("projects/:identifier/trees", "routes/projects.trees.tsx"),
   route("projects/:identifier/integrations", "routes/projects.integrations.tsx"),
   route("projects/:identifier/github/webhook", "routes/projects.github.webhook.ts"),
+  route("projects/:identifier/gitlab/webhook", "routes/projects.gitlab.webhook.ts"),
+  route("projects/:identifier/bitbucket/webhook", "routes/projects.bitbucket.webhook.ts"),
   route("projects/:identifier/trees/:treeId", "routes/projects.trees.tree.tsx"),
   route(
     "projects/:identifier/favorites/:favoriteId",
@@ -87,5 +94,20 @@ export default [
   route(
     "api/v1/projects/:identifier/cards/:number/transitions",
     "routes/api.v1.projects.cards.card.transitions.ts",
+  ),
+  // Phase 5 (P-2, P-3): definitions and content resources.
+  route("api/v1/projects/:identifier/card_types/:id", "routes/api.v1.projects.card-types.card-type.ts"),
+  route("api/v1/projects/:identifier/transitions/:id", "routes/api.v1.projects.transitions.transition.ts"),
+  route("api/v1/projects/:identifier/pages", "routes/api.v1.projects.pages.ts"),
+  route("api/v1/projects/:identifier/pages/:pagename", "routes/api.v1.projects.pages.page.ts"),
+  route("api/v1/projects/:identifier/murmurs", "routes/api.v1.projects.murmurs.ts"),
+  route("api/v1/projects/:identifier/murmurs/:id", "routes/api.v1.projects.murmurs.murmur.ts"),
+  route(
+    "api/v1/projects/:identifier/cards/:number/attachments",
+    "routes/api.v1.projects.cards.card.attachments.ts",
+  ),
+  route(
+    "api/v1/projects/:identifier/cards/:number/attachments/:attachmentId",
+    "routes/api.v1.projects.cards.card.attachments.attachment.ts",
   ),
 ] satisfies RouteConfig;

@@ -13,8 +13,9 @@
  * Owner context: Identity & Access (HTTP adapter).
  */
 import { eq, sql } from "drizzle-orm";
-import { Form, Link, useActionData, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.team";
+import { ActionBar, FormItem, ErrorLines, FlashBox, AdminPage } from "~/components/forms";
 import {
   PROJECT_ROLES,
   PROJECT_ROLE_LABELS,
@@ -32,6 +33,11 @@ import {
   removeTeamMember,
 } from "~/domain/identity/membership.server";
 import { requireUserId } from "~/auth/session.server";
+import {
+  constraintMessage,
+  identitySatisfiesConstraint,
+  permittedStrategyKindsFor,
+} from "~/domain/identity/access-constraint.server";
 
 /** Loads the project's team (with user names) and the users addable to it. */
 export async function loader({ request, params }: Route.LoaderArgs) {
@@ -54,6 +60,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .where(eq(teamMemberships.projectId, project.id))
     .orderBy(sql`lower(${users.name})`)
     .all();
+  // ADR-0021 Decision 6: the list reports who the constraint refuses; it never changes membership.
+  const permitted = permittedStrategyKindsFor(db, project.id);
+  const admins = new Set(db.select({ id: users.id }).from(users).where(eq(users.admin, true)).all().map((u) => u.id));
+  const badged = members.map((member) => ({
+    ...member,
+    qualifies: permitted.length === 0 || admins.has(member.userId) || identitySatisfiesConstraint(db, member.userId, permitted),
+  }));
   const memberIds = new Set(members.map((m) => m.userId));
   const addableUsers = db
     .select({ id: users.id, name: users.name, login: users.login })
@@ -63,7 +76,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     .filter((u) => !memberIds.has(u.id));
   return {
     project: { name: project.name, identifier: project.identifier },
-    members,
+    members: badged,
+    constraint: permitted.length === 0 ? null : constraintMessage(permitted),
     addableUsers,
   };
 }
@@ -120,122 +134,133 @@ export async function action({ request, params }: Route.ActionArgs) {
   throw new Response("Unknown intent", { status: 400 });
 }
 
-/** Team page. Styling is deliberately minimal until the UX-harvest phases. */
+/** Team page — legacy team/list.rhtml with team/_members.rhtml and _user.rhtml beside the admin nav. */
 export default function ProjectTeam() {
-  const { project, members, addableUsers } = useLoaderData<typeof loader>();
+  const { project, members, constraint, addableUsers } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
   const saved = actionData && "saved" in actionData ? actionData.saved : null;
+  const savedMessage =
+    saved === "add"
+      ? "Team member was successfully added."
+      : saved === "role"
+        ? "Permissions were successfully updated."
+        : saved === "remove"
+          ? "Team member was successfully removed."
+          : null;
 
   return (
-    <main style={{ maxWidth: 640, margin: "4rem auto", fontFamily: "sans-serif" }}>
-      <h1>
-        {project.name} team <small>({project.identifier})</small>
-      </h1>
-      <p>
-        <Link to="/projects">All projects</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/groups`}>Groups</Link>
-      </p>
-      {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
+    <AdminPage identifier={project.identifier} current="team">
+      <ActionBar>
+        <a href="#add-member" className="add-user link_as_button primary">
+          Add team member
+        </a>
+      </ActionBar>
+      <div>
+        <h1>{project.name} team members</h1>
+      </div>
+      {savedMessage ? <FlashBox kind="success">{savedMessage}</FlashBox> : null}
       <ErrorLines field="authorization" errors={errors} />
-
-      <h2>Members</h2>
-      {members.length === 0 ? (
-        <p>No team members.</p>
-      ) : (
-        <table>
+      <ErrorLines field="user" errors={errors} />
+      <ErrorLines field="role" errors={errors} />
+      <div id="content" className="content-margin-adjust">
+        <table id="users" className="highlightable-table">
           <thead>
-            <tr>
-              <th>Name</th>
-              <th>Role</th>
-              <th />
+            <tr className="table-top">
+              <th>Display name</th>
+              <th>Sign-in name</th>
+              <th className="align-center">Permissions</th>
+              <th className="align-right last">&nbsp;</th>
             </tr>
           </thead>
           <tbody>
-            {members.map((member) => (
-              <tr key={member.userId}>
-                <td>
-                  {member.name} ({member.login})
-                </td>
-                <td>
-                  <Form method="post" style={{ display: "inline" }}>
-                    <input type="hidden" name="intent" value="role" />
-                    <input type="hidden" name="userId" value={member.userId} />
-                    <select name="role" defaultValue={member.role}>
-                      {PROJECT_ROLES.map((role) => (
-                        <option key={role} value={role}>
-                          {PROJECT_ROLE_LABELS[role]}
-                        </option>
-                      ))}
-                    </select>{" "}
-                    <button type="submit">Change role</button>
-                  </Form>
-                </td>
-                <td>
-                  <Form method="post" style={{ display: "inline" }}>
-                    <input type="hidden" name="intent" value="remove" />
-                    <input type="hidden" name="userId" value={member.userId} />
-                    <button type="submit">Remove</button>
-                  </Form>
+            {members.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="italic-light align-center last">
+                  There are currently no members to list.
                 </td>
               </tr>
-            ))}
+            ) : (
+              members.map((member, index) => (
+                <tr key={member.userId} id={`user_${member.userId}`} className={index % 2 === 0 ? "odd" : "even"}>
+                  <td className="user-name">
+                    {member.name}
+                    {member.qualifies ? null : (
+                      <span className="constraint-badge notes" title={constraint ?? undefined}>
+                        {" "}
+                        (cannot access under the project&apos;s authentication constraint)
+                      </span>
+                    )}
+                  </td>
+                  <td>{member.login}</td>
+                  <td className="permissions_column inline-forms">
+                    <div className="member_permission">
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="role" />
+                        <input type="hidden" name="userId" value={member.userId} />
+                        <select name="role" defaultValue={member.role}>
+                          {PROJECT_ROLES.map((role) => (
+                            <option key={role} value={role}>
+                              {PROJECT_ROLE_LABELS[role]}
+                            </option>
+                          ))}
+                        </select>{" "}
+                        <button type="submit" className="inline">
+                          Change
+                        </button>
+                      </Form>
+                    </div>
+                  </td>
+                  <td className="align-right last inline-forms">
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="remove" />
+                      <input type="hidden" name="userId" value={member.userId} />
+                      <button type="submit" className="inline delete">
+                        Remove
+                      </button>
+                    </Form>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
-      )}
-      <ErrorLines field="user" errors={errors} />
-      <ErrorLines field="role" errors={errors} />
+      </div>
 
-      <h2>Add member</h2>
+      <h2 id="add-member">Add team member</h2>
       {addableUsers.length === 0 ? (
-        <p>Every user is already on this team.</p>
+        <p className="italic-light">Every user is already on this team.</p>
       ) : (
-        <Form method="post">
+        <Form method="post" className="form_contents">
           <input type="hidden" name="intent" value="add" />
-          <p>
-            <label>
-              User
-              <br />
-              <select name="userId">
+          <div className="form_section last">
+            <FormItem label="User:" htmlFor="add_user_id" required>
+              <select id="add_user_id" name="userId">
                 {addableUsers.map((user) => (
                   <option key={user.id} value={user.id}>
                     {user.name} ({user.login})
                   </option>
                 ))}
               </select>
-            </label>
-          </p>
-          <p>
-            <label>
-              Role
-              <br />
-              <select name="role" defaultValue={DEFAULT_PROJECT_ROLE}>
+            </FormItem>
+            <FormItem label="Permissions:" htmlFor="add_role" required>
+              <select id="add_role" name="role" defaultValue={DEFAULT_PROJECT_ROLE}>
                 {PROJECT_ROLES.map((role: ProjectRole) => (
                   <option key={role} value={role}>
                     {PROJECT_ROLE_LABELS[role]}
                   </option>
                 ))}
               </select>
-            </label>
-          </p>
-          <button type="submit">Add to team</button>
+            </FormItem>
+          </div>
+          <ActionBar>
+            <button type="submit" className="save">
+              Add to team
+            </button>
+          </ActionBar>
         </Form>
       )}
-    </main>
-  );
-}
-
-/** Renders a field's error messages, if any. */
-function ErrorLines({ field, errors }: { field: string; errors: FieldErrors }) {
-  return (
-    <>
-      {errors[field]?.map((message) => (
-        <span key={message} style={{ color: "crimson", display: "block" }}>
-          {message}
-        </span>
-      ))}
-    </>
+    </AdminPage>
   );
 }

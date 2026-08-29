@@ -9,7 +9,12 @@
  * Programs sit on the same ladder: legacy gave program_admin the
  * PROJECT_ADMIN rank and program_member the FULL_TEAM_MEMBER rank. The
  * legacy LIGHT_READONLY level is omitted — light users don't exist in
- * this rewrite's schema.
+ * this rewrite's schema. Since ADR-0021 the ladder is read in order:
+ * the site-admin trump, then the project's access constraint on how
+ * this request was authenticated (access-constraint.server.ts, judged
+ * from the request principal), then the role rank — a session that
+ * fails the constraint ranks ANONYMOUS and a command is refused with
+ * the constraint's own message.
  *
  * Public interface: `PrivilegeLevel`, `rolePrivilegeLevel`,
  * `privilegeLevelFor`, `authorizeProjectAction`,
@@ -29,6 +34,8 @@ import {
   type ProjectRole,
 } from "~/shared/wire-types";
 import { type CommandResult, reject } from "~/domain/command.server";
+import { accessRefusal } from "~/domain/identity/access-constraint.server";
+import { currentPrincipal } from "~/domain/identity/principal.server";
 
 /**
  * The privilege ladder, highest first (legacy PrivilegeLevel ranks).
@@ -84,6 +91,8 @@ export function privilegeLevelFor(
     .get();
   if (!user) return PrivilegeLevel.ANONYMOUS;
   if (user.admin) return PrivilegeLevel.MINGLE_ADMIN;
+  // ADR-0021: trump → constraint → role rank.
+  if (accessRefusal(db, userId, projectId, currentPrincipal())) return PrivilegeLevel.ANONYMOUS;
   const membership = db
     .select({ role: teamMemberships.role })
     .from(teamMemberships)
@@ -151,6 +160,8 @@ export function authorizeProjectAction(
   minimum: PrivilegeRank,
 ): CommandResult<never> | null {
   if (privilegeLevelFor(db, actorUserId, projectId) >= minimum) return null;
+  const refusal = accessRefusal(db, actorUserId, projectId, currentPrincipal());
+  if (refusal) return reject("authorization", refusal);
   return reject(
     "authorization",
     `requires ${requirementName(minimum)} access to this project`,

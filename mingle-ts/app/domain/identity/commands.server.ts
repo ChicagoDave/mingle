@@ -206,15 +206,29 @@ export interface UpdateUserProfileInput {
   userId: number;
   name: string;
   email?: string | null;
+  /** IANA zone name for display (ADR-0023); absent keeps the stored one. */
+  timeZone?: string | null;
+}
+
+/** Whether the runtime knows the zone (`Intl` throws for an unknown one). */
+function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * UpdateUserProfile — changes display name and email.
+ * UpdateUserProfile — changes display name, email, and time zone.
  *
- * DOES: updates the `users` row (name, email, updated_at) and appends a
- * UserProfileUpdated event naming the changed fields.
- * REJECTS: unknown user, blank name, invalid email, or an email already
- * used by a different account.
+ * DOES: updates the `users` row (name, email, time_zone, updated_at)
+ * and appends a UserProfileUpdated event naming the changed fields
+ * (`timeZone` among them, ADR-0023 Decision 6).
+ * REJECTS: unknown user, blank name, invalid email, an email already
+ * used by a different account, or a time zone the runtime does not
+ * know.
  *
  * @returns the updated user row, or field errors
  */
@@ -232,6 +246,8 @@ export function updateUserProfile(
   const name = input.name.trim();
   const email = input.email?.trim() || null;
   if (!name) return reject("name", "can't be blank");
+  const timeZone = input.timeZone === undefined || input.timeZone === null ? current.timeZone : input.timeZone.trim() || "UTC";
+  if (!isTimeZone(timeZone)) return reject("timeZone", "is not a known time zone");
   if (email) {
     if (email.length < 3 || email.length > 255 || !EMAIL_FORMAT.test(email))
       return reject("email", "is invalid");
@@ -246,11 +262,12 @@ export function updateUserProfile(
   const changed = [
     ...(name !== current.name ? ["name"] : []),
     ...(email !== current.email ? ["email"] : []),
+    ...(timeZone !== current.timeZone ? ["timeZone"] : []),
   ];
   return db.transaction((tx) => {
     const row = tx
       .update(users)
-      .set({ name, email, updatedAt: new Date() })
+      .set({ name, email, timeZone, updatedAt: new Date() })
       .where(eq(users.id, input.userId))
       .returning()
       .get();

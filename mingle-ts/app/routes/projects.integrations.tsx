@@ -4,8 +4,12 @@
  *
  * Purpose: the project admin's page for external integrations, the
  * successor of legacy's Slack settings and `github#new`. Forms post to
- * one action by `intent`: "slack" (ConfigureSlackIntegration; the
- * webhook URL is write-only), "slack-remove", "github-add"
+ * one action by `intent`: "slack" (ConfigureSlackIntegration — the
+ * default webhook, or `integrationId`; the URL is write-only),
+ * "slack-add" (AddSlackWebhook), "slack-default"
+ * (SetDefaultSlackWebhook), "slack-routes" (RouteSlackEvents, one
+ * `route[<event type>]` field per type: "default", "suppressed", or a
+ * webhook id), "slack-remove" (`integrationId`), "github-add"
  * (ConfigureGithubIntegration — the secret is shown once with the
  * payload URL to paste into GitHub), "github-remove".
  *
@@ -15,6 +19,7 @@
 import { eq } from "drizzle-orm";
 import { Form, Link, useActionData, useLoaderData } from "react-router";
 import type { Route } from "./+types/projects.integrations";
+import { ActionBar, FormItem, ErrorLines, FlashBox, AdminPage } from "~/components/forms";
 import type { FieldErrors } from "~/shared/wire-types";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
@@ -23,7 +28,22 @@ import { requireUserId } from "~/auth/session.server";
 import { PrivilegeLevel, privilegeLevelFor } from "~/domain/identity/authorization.server";
 import { configureGithubIntegration, removeGithubIntegration } from "~/domain/integrations/github.server";
 import { githubIntegrationViews, recentCommitLinks, slackIntegrationView } from "~/domain/integrations/read.server";
-import { configureSlackIntegration, removeSlackIntegration } from "~/domain/integrations/slack.server";
+import {
+  addSlackWebhook,
+  configureSlackIntegration,
+  removeSlackIntegration,
+  routeSlackEvents,
+  setDefaultSlackWebhook,
+} from "~/domain/integrations/slack.server";
+import {
+  SCM_PROVIDERS,
+  SCM_PROVIDER_LABELS,
+  SLACK_EVENT_TYPES,
+  SLACK_EVENT_TYPE_LABELS,
+  type ScmProvider,
+  type SlackEventType,
+  type SlackRouteTarget,
+} from "~/shared/wire-types";
 
 /** The project, for a project admin; 404 unknown, 403 below admin. */
 function requireProjectAdmin(userId: number, identifier: string | undefined) {
@@ -42,6 +62,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     slack: slackIntegrationView(db, project.id),
     github: githubIntegrationViews(db, project.id),
     payloadUrl: new URL(`/projects/${project.identifier}/github/webhook`, request.url).toString(),
+    payloadUrls: Object.fromEntries(
+      SCM_PROVIDERS.map((provider) => [provider, new URL(`/projects/${project.identifier}/${provider}/webhook`, request.url).toString()]),
+    ) as Record<ScmProvider, string>,
     commits: recentCommitLinks(db, project.id),
   };
 }
@@ -56,10 +79,12 @@ export async function action({ request, params }: Route.ActionArgs) {
   const done = <T,>(result: { ok: true; value: T } | { ok: false; errors: FieldErrors }, saved: string) =>
     result.ok ? { saved, intent } : { intent, errors: result.errors };
 
+  const integrationId = form.get("integrationId") ? Number(form.get("integrationId")) : null;
   if (intent === "slack")
     return done(
       configureSlackIntegration(db, sealer, {
         projectId: project.id,
+        integrationId,
         webhookUrl: text("webhookUrl"),
         channelLabel: text("channelLabel"),
         enabled: form.get("enabled") === "on",
@@ -67,11 +92,36 @@ export async function action({ request, params }: Route.ActionArgs) {
       }),
       "slack",
     );
-  if (intent === "slack-remove") return done(removeSlackIntegration(db, { projectId: project.id, actorUserId }), "slack-remove");
+  if (intent === "slack-add")
+    return done(
+      addSlackWebhook(db, sealer, {
+        projectId: project.id,
+        webhookUrl: text("webhookUrl"),
+        channelLabel: text("channelLabel"),
+        enabled: form.get("enabled") === "on",
+        actorUserId,
+      }),
+      "slack-add",
+    );
+  if (intent === "slack-default")
+    return done(setDefaultSlackWebhook(db, { projectId: project.id, integrationId: integrationId ?? 0, actorUserId }), "slack-default");
+  if (intent === "slack-routes") {
+    const routes: Partial<Record<SlackEventType, SlackRouteTarget>> = {};
+    for (const type of SLACK_EVENT_TYPES) {
+      const posted = form.get(`route[${type}]`);
+      if (posted === null) continue;
+      const value = String(posted);
+      routes[type] = value === "default" || value === "suppressed" ? value : Number(value);
+    }
+    return done(routeSlackEvents(db, { projectId: project.id, routes, actorUserId }), "slack-routes");
+  }
+  if (intent === "slack-remove") return done(removeSlackIntegration(db, { projectId: project.id, integrationId, actorUserId }), "slack-remove");
   if (intent === "github-add") {
-    const result = configureGithubIntegration(db, sealer, { projectId: project.id, repository: text("repository"), actorUserId });
+    const posted = text("provider") || "github";
+    const provider = (SCM_PROVIDERS as readonly string[]).includes(posted) ? (posted as ScmProvider) : "github";
+    const result = configureGithubIntegration(db, sealer, { projectId: project.id, repository: text("repository"), provider, actorUserId });
     return result.ok
-      ? { saved: "github-add", intent, secret: result.value.secret, repository: result.value.row.repository }
+      ? { saved: "github-add", intent, secret: result.value.secret, repository: result.value.row.repository, provider }
       : { intent, errors: result.errors };
   }
   if (intent === "github-remove")
@@ -82,9 +132,9 @@ export async function action({ request, params }: Route.ActionArgs) {
   throw new Response("Unknown intent", { status: 400 });
 }
 
-/** Integrations page. Styling is deliberately minimal until the UX-harvest phases. */
+/** Integrations — no legacy counterpart (Phase 32); reuses the legacy settings-page structure (form sections, action bars, highlightable tables) beside the admin nav. */
 export default function ProjectIntegrations() {
-  const { project, slack, github, payloadUrl, commits } = useLoaderData<typeof loader>();
+  const { project, slack, github, payloadUrl, payloadUrls, commits } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errorsFor = (intent: string): FieldErrors =>
     actionData && "errors" in actionData && actionData.intent === intent ? (actionData.errors ?? {}) : {};
@@ -92,135 +142,266 @@ export default function ProjectIntegrations() {
   const secret = actionData && "secret" in actionData ? actionData : null;
 
   return (
-    <main style={{ maxWidth: 720, margin: "4rem auto", fontFamily: "sans-serif" }}>
-      <h1>Integrations — {project.name}</h1>
-      <p>
-        <Link to={`/projects/${project.identifier}/settings`}>Settings</Link> ·{" "}
-        <Link to={`/projects/${project.identifier}/cards`}>Cards</Link>
-      </p>
-      {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
+    <AdminPage identifier={project.identifier} current="integrations">
+      <h1>Integrations</h1>
+      {saved ? <FlashBox kind="success">Integration settings were successfully saved.</FlashBox> : null}
 
-      <h2>Slack</h2>
-      <p>
-        <small>
-          Every history entry of this project (cards, pages, murmurs, dependencies) is posted to a Slack incoming
-          webhook. Create one in Slack and paste its URL here; it is stored encrypted and never shown again.
-        </small>
+      <h2 id="slack">Slack</h2>
+      <p className="notes">
+        Every history entry of this project (cards, pages, murmurs, dependencies) is posted to Slack incoming webhooks.
+        An incoming webhook is bound to its channel when Slack creates it, so a channel is a webhook URL: register one
+        per channel, pick the default, and route or suppress event types below. URLs are stored encrypted and never
+        shown again.
       </p>
-      {slack.configured ? (
-        <p>
-          Configured{slack.channelLabel ? ` for ${slack.channelLabel}` : ""}, {slack.enabled ? "enabled" : "disabled"}.
-          {slack.lastDeliveredAt ? ` Last delivered ${slack.lastDeliveredAt.slice(0, 19).replace("T", " ")}.` : " Nothing delivered yet."}
-          {slack.lastError ? <span style={{ color: "crimson" }}> Last error: {slack.lastError}</span> : null}
-        </p>
-      ) : (
-        <p>Not configured.</p>
-      )}
-      <Form method="post">
-        <input type="hidden" name="intent" value="slack" />
-        <p>
-          <label>
-            Webhook URL{slack.configured ? " (set — leave blank to keep)" : ""}
-            <br />
-            <input name="webhookUrl" type="password" autoComplete="off" style={{ width: "100%" }} />
-          </label>
-          <ErrorLines field="webhookUrl" errors={errorsFor("slack")} />
-        </p>
-        <p>
-          <label>
-            Channel label (display only)
-            <br />
-            <input name="channelLabel" defaultValue={slack.channelLabel} />
-          </label>
-        </p>
-        <p>
-          <label>
-            <input type="checkbox" name="enabled" defaultChecked={!slack.configured || slack.enabled} /> Enabled
-          </label>
-        </p>
-        <ErrorLines field="authorization" errors={errorsFor("slack")} />
-        <button type="submit">Save Slack settings</button>
+      <table id="slack-webhooks" className="highlightable-table">
+        <thead>
+          <tr className="table-top">
+            <th>Channel</th>
+            <th>Enabled</th>
+            <th>Default</th>
+            <th>Last delivered</th>
+            <th className="align-right last">&nbsp;</th>
+          </tr>
+        </thead>
+        <tbody>
+          {slack.webhooks.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="italic-light align-center last">
+                No webhooks registered.
+              </td>
+            </tr>
+          ) : (
+            slack.webhooks.map((webhook, index) => (
+              <tr key={webhook.id} className={index % 2 === 0 ? "odd" : "even"}>
+                <td>{webhook.channelLabel || <span className="italic-light">(unlabelled)</span>}</td>
+                <td>{webhook.enabled ? "yes" : "no"}</td>
+                <td className="inline-forms">
+                  {webhook.isDefault ? (
+                    "default"
+                  ) : (
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="slack-default" />
+                      <input type="hidden" name="integrationId" value={webhook.id} />
+                      <button type="submit" className="inline">
+                        Make default
+                      </button>
+                    </Form>
+                  )}
+                </td>
+                <td>
+                  {webhook.lastDeliveredAt ? webhook.lastDeliveredAt.slice(0, 19).replace("T", " ") : "never"}
+                  {webhook.lastError ? <span className="field_error"> Last error: {webhook.lastError}</span> : null}
+                </td>
+                <td className="align-right last inline-forms">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="slack-remove" />
+                    <input type="hidden" name="integrationId" value={webhook.id} />
+                    <button type="submit" className="inline delete">
+                      Remove
+                    </button>
+                  </Form>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+      <Form method="post" className="form_contents" id="slack-add">
+        <input type="hidden" name="intent" value="slack-add" />
+        <h3>Add a webhook</h3>
+        <div className="form_section last">
+          <FormItem label="Webhook URL:" htmlFor="slack_webhook_url" required field="webhookUrl" errors={errorsFor("slack-add")}>
+            <input id="slack_webhook_url" name="webhookUrl" type="password" autoComplete="off" className="width-full" />
+          </FormItem>
+          <FormItem label="Channel label:" htmlFor="slack_channel_label" notes="display only">
+            <input id="slack_channel_label" name="channelLabel" className="width-large" />
+          </FormItem>
+          <div className="checkbox_row">
+            <input type="checkbox" id="slack_enabled" name="enabled" defaultChecked />{" "}
+            <label htmlFor="slack_enabled" className="inline">
+              Enabled
+            </label>
+          </div>
+          <ErrorLines field="authorization" errors={errorsFor("slack-add")} />
+        </div>
+        <ActionBar>
+          <button type="submit" className="save">
+            Add webhook
+          </button>
+        </ActionBar>
       </Form>
       {slack.configured ? (
-        <Form method="post">
-          <input type="hidden" name="intent" value="slack-remove" />
-          <button type="submit">Remove Slack integration</button>
+        <Form method="post" className="form_contents" id="slack-routes">
+          <input type="hidden" name="intent" value="slack-routes" />
+          <h3>Event routing</h3>
+          <p className="notes">
+            Each event type goes to the default webhook unless routed to another one or suppressed.
+          </p>
+          <ErrorLines field="routes" errors={errorsFor("slack-routes")} />
+          <ErrorLines field="authorization" errors={errorsFor("slack-routes")} />
+          <table id="slack-event-routes" className="highlightable-table">
+            <thead>
+              <tr className="table-top">
+                <th>Event</th>
+                <th className="last">Goes to</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SLACK_EVENT_TYPES.map((type, index) => (
+                <tr key={type} className={index % 2 === 0 ? "odd" : "even"}>
+                  <td>{SLACK_EVENT_TYPE_LABELS[type]}</td>
+                  <td className="last">
+                    <select name={`route[${type}]`} defaultValue={String(slack.routes[type])}>
+                      <option value="default">Default webhook</option>
+                      {slack.webhooks
+                        .filter((webhook) => !webhook.isDefault)
+                        .map((webhook) => (
+                          <option key={webhook.id} value={String(webhook.id)}>
+                            {webhook.channelLabel || `webhook #${webhook.id}`}
+                          </option>
+                        ))}
+                      <option value="suppressed">Suppressed (not posted)</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ActionBar>
+            <button type="submit" className="save">
+              Save routing
+            </button>
+          </ActionBar>
         </Form>
       ) : null}
 
-      <h2>GitHub</h2>
-      <p>
-        <small>
-          Register a repository, then add a webhook on GitHub for push events with content type <code>application/json</code>,
-          payload URL <code>{payloadUrl}</code>, and the secret shown once below. Commits whose message mentions a card
-          (<code>#123</code>) are linked to it and murmured into the project.
-        </small>
+      <h2 id="github">Source repositories</h2>
+      <p className="notes">
+        Register a repository on GitHub, GitLab, or Bitbucket, then add a webhook there with the payload URL for its
+        host and the secret shown once below. Commits whose message mentions a card (<code>#123</code>) are linked to
+        it and murmured into the project; on GitHub, pull requests mentioning a card are linked too, and commit
+        statuses are shown beside the commits.
       </p>
+      <ul className="notes" id="payload-urls">
+        <li>
+          GitHub — push, pull_request and status events, content type <code>application/json</code>, payload URL{" "}
+          <code>{payloadUrl}</code>, secret = the registration secret (signed as <code>X-Hub-Signature-256</code>).
+        </li>
+        <li>
+          GitLab — push events, URL <code>{payloadUrls.gitlab}</code>, secret token = the registration secret (sent as{" "}
+          <code>X-Gitlab-Token</code>).
+        </li>
+        <li>
+          Bitbucket Cloud — repository push, URL <code>{payloadUrls.bitbucket}</code>, secret = the registration secret
+          (signed as <code>X-Hub-Signature</code>).
+        </li>
+      </ul>
       {secret ? (
-        <p style={{ background: "#fff8dc", padding: "0.5rem" }}>
-          Webhook secret for <strong>{secret.repository}</strong> — copy it now, it will not be shown again:
+        <FlashBox kind="info">
+          Webhook secret for <strong>{secret.repository}</strong> on {SCM_PROVIDER_LABELS[secret.provider as ScmProvider]} — copy it
+          now, it will not be shown again:
           <br />
           <code data-testid="github-secret">{secret.secret}</code>
-        </p>
+        </FlashBox>
       ) : null}
-      {github.length === 0 ? (
-        <p>No repositories registered.</p>
-      ) : (
-        <ul>
-          {github.map((repo) => (
-            <li key={repo.id}>
-              <code>{repo.repository}</code>
-              {repo.lastReceivedAt ? ` — last push ${repo.lastReceivedAt.slice(0, 19).replace("T", " ")}` : " — no pushes yet"}{" "}
-              <Form method="post" style={{ display: "inline" }}>
-                <input type="hidden" name="intent" value="github-remove" />
-                <input type="hidden" name="integrationId" value={repo.id} />
-                <button type="submit">Remove</button>
-              </Form>
-            </li>
-          ))}
-        </ul>
-      )}
-      <Form method="post">
+      <table id="github-repositories" className="highlightable-table">
+        <thead>
+          <tr className="table-top">
+            <th>Host</th>
+            <th>Repository</th>
+            <th>Last push</th>
+            <th className="align-right last">&nbsp;</th>
+          </tr>
+        </thead>
+        <tbody>
+          {github.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="italic-light align-center last">
+                No repositories registered.
+              </td>
+            </tr>
+          ) : (
+            github.map((repo, index) => (
+              <tr key={repo.id} className={index % 2 === 0 ? "odd" : "even"}>
+                <td>{SCM_PROVIDER_LABELS[repo.provider]}</td>
+                <td>
+                  <code>{repo.repository}</code>
+                </td>
+                <td>{repo.lastReceivedAt ? repo.lastReceivedAt.slice(0, 19).replace("T", " ") : "no pushes yet"}</td>
+                <td className="align-right last inline-forms">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="github-remove" />
+                    <input type="hidden" name="integrationId" value={repo.id} />
+                    <button type="submit" className="inline delete">
+                      Remove
+                    </button>
+                  </Form>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+      <Form method="post" className="form_contents">
         <input type="hidden" name="intent" value="github-add" />
-        <p>
-          <label>
-            Repository (owner/name)
-            <br />
-            <input name="repository" placeholder="acme/widgets" />
-          </label>
-          <ErrorLines field="repository" errors={errorsFor("github-add")} />
+        <div className="form_section last">
+          <FormItem label="Host:" htmlFor="scm_provider" required field="provider" errors={errorsFor("github-add")}>
+            <select id="scm_provider" name="provider" defaultValue="github">
+              {SCM_PROVIDERS.map((provider) => (
+                <option key={provider} value={provider}>
+                  {SCM_PROVIDER_LABELS[provider]}
+                </option>
+              ))}
+            </select>
+          </FormItem>
+          <FormItem
+            label="Repository:"
+            htmlFor="github_repository"
+            required
+            notes="owner/name"
+            field="repository"
+            errors={errorsFor("github-add")}
+          >
+            <input id="github_repository" name="repository" className="width-large" placeholder="acme/widgets" />
+          </FormItem>
           <ErrorLines field="authorization" errors={errorsFor("github-add")} />
-        </p>
-        <button type="submit">Register repository</button>
+        </div>
+        <ActionBar>
+          <button type="submit" className="save">
+            Register repository
+          </button>
+        </ActionBar>
       </Form>
 
-      <h2>Recent commits</h2>
+      <h2 id="recent-commits-heading">Recent commits</h2>
       {commits.length === 0 ? (
-        <p>No commits linked yet.</p>
+        <p className="italic-light">No commits linked yet.</p>
       ) : (
-        <ul id="recent-commits">
-          {commits.map((commit) => (
-            <li key={`${commit.sha}-${commit.cardNumber}`}>
-              <a href={commit.url}>{commit.shortSha}</a> on{" "}
-              <Link to={`/projects/${project.identifier}/cards/${commit.cardNumber}`}>#{commit.cardNumber}</Link> by{" "}
-              {commit.authorName}: {commit.message.split("\n")[0]}
-            </li>
-          ))}
-        </ul>
+        <table id="recent-commits" className="highlightable-table">
+          <thead>
+            <tr className="table-top">
+              <th>Commit</th>
+              <th>Card</th>
+              <th>Author</th>
+              <th className="last">Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {commits.map((commit, index) => (
+              <tr key={`${commit.sha}-${commit.cardNumber}`} className={index % 2 === 0 ? "odd" : "even"}>
+                <td>
+                  <a href={commit.url}>{commit.shortSha}</a>
+                </td>
+                <td>
+                  <Link to={`/projects/${project.identifier}/cards/${commit.cardNumber}`}>#{commit.cardNumber}</Link>
+                </td>
+                <td>{commit.authorName}</td>
+                <td className="last">{commit.message.split("\n")[0]}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
-    </main>
-  );
-}
-
-/** Renders a field's error messages, if any. */
-function ErrorLines({ field, errors }: { field: string; errors: FieldErrors }) {
-  return (
-    <>
-      {errors[field]?.map((message) => (
-        <span key={message} style={{ color: "crimson", display: "block" }}>
-          {message}
-        </span>
-      ))}
-    </>
+    </AdminPage>
   );
 }

@@ -6,7 +6,9 @@
  * session: the request authenticates by GitHub's `X-Hub-Signature-256`
  * over the raw body, checked against every enabled registration of
  * the project for the payload's repository. A `ping` event answers
- * 200 without side effects; a `push` runs ReceiveGithubPush.
+ * 200 without side effects; a `push` runs ReceiveGithubPush; a
+ * `pull_request` runs ReceiveGithubPullRequest and a `status`
+ * ReceiveGithubStatus (P-11); other events answer 200, ignored.
  *
  * Responses: 200 with the counts; 400 malformed body; 401 no or
  * wrong signature; 404 unknown project or unregistered repository;
@@ -20,7 +22,15 @@ import type { Route } from "./+types/projects.github.webhook";
 import { db } from "~/db/client.server";
 import { projects } from "~/db/schema/projects";
 import { sealer } from "~/auth/sealer.server";
-import { parsePushPayload, receiveGithubPush, verifyGithubSignature } from "~/domain/integrations/github.server";
+import {
+  parsePullRequestPayload,
+  parsePushPayload,
+  parseStatusPayload,
+  receiveGithubPullRequest,
+  receiveGithubPush,
+  receiveGithubStatus,
+  verifyGithubSignature,
+} from "~/domain/integrations/github.server";
 import { findGithubIntegrations } from "~/domain/integrations/read.server";
 
 const json = (body: unknown, status: number) =>
@@ -58,6 +68,18 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   const event = request.headers.get("X-GitHub-Event") ?? "push";
   if (event === "ping") return json({ ok: true, event: "ping" }, 200);
+  if (event === "pull_request") {
+    const payload = parsePullRequestPayload(body);
+    if (!payload) return json({ error: "Payload is not a pull_request event" }, 400);
+    const result = receiveGithubPullRequest(db, { integrationId: integration.id, payload });
+    return result.ok ? json({ ok: true, event, ...result.value }, 200) : json({ error: "Pull request refused", errors: result.errors }, 422);
+  }
+  if (event === "status") {
+    const payload = parseStatusPayload(body);
+    if (!payload) return json({ error: "Payload is not a status event" }, 400);
+    const result = receiveGithubStatus(db, { integrationId: integration.id, payload });
+    return result.ok ? json({ ok: true, event, ...result.value }, 200) : json({ error: "Status refused", errors: result.errors }, 422);
+  }
   if (event !== "push") return json({ ok: true, event, ignored: true }, 200);
 
   const payload = parsePushPayload(body);

@@ -8,12 +8,14 @@ import type { RenderToPipeableStreamOptions } from "react-dom/server";
 import { renderToPipeableStream } from "react-dom/server";
 import { db } from "~/db/client.server";
 import { jobHandlers } from "~/jobs/handlers.server";
+import { ensureScheduler } from "~/jobs/scheduler.server";
 import { ensureJobWorker } from "~/jobs/worker.server";
 
 // The job worker (ADR-0002: in-process, draining the SQLite jobs table)
 // starts with the server entry because this is the one module every
 // server process evaluates exactly once per boot. Nothing else starts it.
 ensureJobWorker(db, jobHandlers);
+ensureScheduler(db);
 
 export const streamTimeout = 5_000;
 

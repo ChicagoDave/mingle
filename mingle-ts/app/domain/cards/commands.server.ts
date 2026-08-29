@@ -21,12 +21,13 @@
  *
  * Commands → events:
  *   DefineCardType → CardTypeDefined
- *   CreateCard     → CardCreated   (+ version 1)
+ *   CreateCard     → CardCreated   (+ version 1, carrying the card
+ *                    type's defaults — card-defaults.server.ts, P-2)
  *   UpdateCard     → CardUpdated   (+ next version)
  *   DeleteCard     → CardDeleted   (+ deletion version)
  *
- * Public interface: `defineCardType`, `createCard`, `updateCard`,
- * `deleteCard`.
+ * Public interface: `defineCardType`, `deleteCardType`, `createCard`,
+ * `updateCard`, `deleteCard`.
  *
  * Owner context: Card Management. Handlers take the Drizzle handle as a
  * parameter — no module-level infrastructure imports; tests supply
@@ -46,13 +47,18 @@ import {
   cardChecklistItems,
 } from "~/db/schema/card-content";
 import { cardPropertyValues } from "~/db/schema/properties";
+import { cardDefaults } from "~/db/schema/card-defaults";
 import {
   aggregateHoldersOf,
   cardPropertySnapshot,
+  insertInitialPropertyValues,
   recomputeAggregatesAround,
   recomputeAggregatesFor,
 } from "~/domain/cards/properties.server";
+import { defaultPropertyChanges } from "~/domain/cards/card-defaults.server";
 import { removeDeletedCardFromTrees, reviseTreesForCardTypeChange } from "~/domain/trees/commands.server";
+import { treeCardTypes } from "~/db/schema/trees";
+import { transitionActions, transitionPrerequisites, transitions } from "~/db/schema/transitions";
 import { projects } from "~/db/schema/projects";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
@@ -204,6 +210,88 @@ export function defineCardType(
   });
 }
 
+export interface DeleteCardTypeInput {
+  projectId: number;
+  cardTypeId: number;
+  actorUserId: number;
+}
+
+/**
+ * DeleteCardType — removes a card type nothing depends on.
+ *
+ * DOES: deletes the `card_types` row, the transitions restricted to
+ * that type (with their prerequisite and action rows — legacy
+ * `has_many :transitions, :dependent => :destroy`), and appends a
+ * CardTypeDeleted event, all in one transaction.
+ * REJECTS: unknown project or card type; actor below project
+ * administrator; a type that is the project's last, that a live card
+ * carries, or that a tree configuration includes — legacy
+ * `CardType#can_be_destroy?`, with its message ("<name> cannot be
+ * deleted because it is being used or is the last card type.").
+ *
+ * @returns the deleted card type row, or field errors
+ */
+export function deleteCardType(
+  db: BetterSQLite3Database,
+  input: DeleteCardTypeInput,
+): CommandResult<CardTypeRow> {
+  if (!projectExists(db, input.projectId))
+    return reject("project", "does not exist");
+  const denied = authorizeProjectAction(
+    db,
+    input.actorUserId,
+    input.projectId,
+    PrivilegeLevel.PROJECT_ADMIN,
+  );
+  if (denied) return denied;
+
+  const cardType = db
+    .select()
+    .from(cardTypes)
+    .where(and(eq(cardTypes.projectId, input.projectId), eq(cardTypes.id, input.cardTypeId)))
+    .get();
+  if (!cardType) return reject("cardType", "does not exist");
+
+  const typeCount = db.get<{ count: number }>(
+    sql`SELECT COUNT(*) AS count FROM ${cardTypes} WHERE ${cardTypes.projectId} = ${input.projectId}`,
+  );
+  const cardCount = db.get<{ count: number }>(
+    sql`SELECT COUNT(*) AS count FROM ${cards} WHERE ${cards.cardTypeId} = ${cardType.id}`,
+  );
+  const treeCount = db.get<{ count: number }>(
+    sql`SELECT COUNT(*) AS count FROM ${treeCardTypes} WHERE ${treeCardTypes.cardTypeId} = ${cardType.id}`,
+  );
+  if ((typeCount?.count ?? 0) <= 1 || (cardCount?.count ?? 0) > 0 || (treeCount?.count ?? 0) > 0)
+    return reject(
+      "cardType",
+      `${cardType.name} cannot be deleted because it is being used or is the last card type.`,
+    );
+
+  return db.transaction((tx) => {
+    const restricted = tx
+      .select({ id: transitions.id })
+      .from(transitions)
+      .where(and(eq(transitions.projectId, input.projectId), eq(transitions.cardTypeId, cardType.id)))
+      .all()
+      .map((row) => row.id);
+    for (const transitionId of restricted) {
+      tx.delete(transitionPrerequisites).where(eq(transitionPrerequisites.transitionId, transitionId)).run();
+      tx.delete(transitionActions).where(eq(transitionActions.transitionId, transitionId)).run();
+      tx.delete(transitions).where(eq(transitions.id, transitionId)).run();
+    }
+    tx.delete(cardDefaults).where(eq(cardDefaults.cardTypeId, cardType.id)).run();
+    tx.delete(cardTypes).where(eq(cardTypes.id, cardType.id)).run();
+    emitEvent(tx, {
+      type: "CardTypeDeleted",
+      aggregateType: "Project",
+      aggregateId: input.projectId,
+      payload: { name: cardType.name, deletedTransitions: restricted.length },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: cardType } as CommandResult<CardTypeRow>;
+  });
+}
+
 export interface CreateCardInput {
   projectId: number;
   name: string;
@@ -222,15 +310,21 @@ export interface CreateCardInput {
  * CreateCard — creates a card as version 1 of its history.
  *
  * DOES: inserts a `cards` row (number = the explicit number when given,
- * else the project's next; version 1) plus its version-1
- * `card_versions` snapshot, and appends a CardCreated event, all in
- * one transaction. The number sequence continues past an explicit
- * number (the next card takes one past the highest ever used).
+ * else the project's next; version 1), writes the card type's default
+ * property values as the card's initial `card_property_values` rows
+ * (P-2 — `(current user)` resolved to the actor; formulas recomputed),
+ * inserts the version-1 `card_versions` snapshot carrying them, and
+ * appends a CardCreated event naming the defaulted properties, all in
+ * one transaction. A defaulted card is version 1, not 1+N; a value a
+ * caller sets afterwards is its own version, as ever. The number
+ * sequence continues past an explicit number (the next card takes one
+ * past the highest ever used).
  * REJECTS: unknown project, actor below full team member (legacy: card
  * create is FULL_TEAM_MEMBER — readonly members cannot), blank name,
- * name over 255 chars, a card type not belonging to the project, or an
+ * name over 255 chars, a card type not belonging to the project, an
  * explicit number that is not a positive integer or is already used
- * (live or deleted — numbers are never reused).
+ * (live or deleted — numbers are never reused), or a stored default
+ * the property no longer accepts ("Unable to set default for …").
  *
  * @returns the created card row, or field errors
  */
@@ -258,6 +352,10 @@ export function createCard(
     if (!Number.isInteger(input.number) || input.number <= 0) return reject("number", "must be a positive whole number");
     if (cardNumberUsed(db, input.projectId, input.number)) return reject("number", "has already been taken");
   }
+  // The card type's defaults, validated before the transaction opens so
+  // a stale default rejects the creation rather than half of it.
+  const defaults = defaultPropertyChanges(db, input.projectId, cardType, input.actorUserId);
+  if (!defaults.ok) return defaults;
 
   return db.transaction((tx) => {
     const number = input.number ?? nextCardNumber(tx, input.projectId);
@@ -275,6 +373,7 @@ export function createCard(
       })
       .returning()
       .get();
+    if (defaults.value.length > 0) insertInitialPropertyValues(tx, input.projectId, row.id, defaults.value);
     tx.insert(cardVersions)
       .values({
         cardId: row.id,
@@ -284,6 +383,7 @@ export function createCard(
         name,
         description,
         cardTypeName: cardType.name,
+        propertyValues: JSON.stringify(cardPropertySnapshot(tx, row.id)),
         createdByUserId: input.actorUserId,
         modifiedByUserId: input.actorUserId,
       })
@@ -293,7 +393,13 @@ export function createCard(
       type: "CardCreated",
       aggregateType: "Card",
       aggregateId: row.id,
-      payload: { projectId: input.projectId, number, name, cardTypeName: cardType.name },
+      payload: {
+        projectId: input.projectId,
+        number,
+        name,
+        cardTypeName: cardType.name,
+        defaultedProperties: defaults.value.map((change) => change.definition.name),
+      },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: row } as CommandResult<CardRow>;

@@ -1,0 +1,51 @@
+{
+  "format": "mingle-project-template",
+  "version": 2,
+  "exportedAt": "2026-08-29T00:00:00.000Z",
+  "source": {
+    "name": "Kanban",
+    "identifier": "kanban",
+    "description": "A Kanban board: work flows Proposed → Ready → Backlog → In Progress → In Test → Completed, with WIP limits on the working columns. Harvested from legacy Mingle's kanban_template.yml."
+  },
+  "cardTypes": ["Work"],
+  "properties": [
+    {
+      "name": "Status",
+      "kind": "enumerated",
+      "values": ["Proposed", "Ready", "Backlog", "In Progress", "In Test", "Completed"],
+      "transitionOnly": false
+    },
+    { "name": "Owner", "kind": "user", "transitionOnly": false },
+    { "name": "Pair", "kind": "user", "transitionOnly": false }
+  ],
+  "trees": [],
+  "aggregates": [],
+  "transitions": [],
+  "variables": [],
+  "cardDefaults": [
+    { "cardType": "Work", "values": { "Status": "Proposed", "Owner": "(current user)" } }
+  ],
+  "favorites": [
+    {
+      "name": "Kanban Board",
+      "style": "grid",
+      "filters": ["[Type][is][Work]"],
+      "columns": [],
+      "groupBy": "Status",
+      "tabView": true,
+      "wipLimits": { "In Progress": 2, "In Test": 2 }
+    }
+  ],
+  "cards": [
+    { "name": "Work 1", "cardType": "Work", "number": 1, "values": { "Status": "In Progress" } },
+    { "name": "Work 2", "cardType": "Work", "number": 2, "values": { "Status": "In Progress" } },
+    { "name": "Work 3", "cardType": "Work", "number": 3, "values": { "Status": "Ready" } },
+    { "name": "Work 4", "cardType": "Work", "number": 4, "values": { "Status": "Proposed" } }
+  ],
+  "pages": [
+    {
+      "name": "Overview Page",
+      "content": "<div class=\"dashboard-panel\"><h2>Cumulative Flow</h2><div class=\"dashboard-content\"><p>{{ daily-history-chart\n  aggregate: count(*)\n  start-date: {{template:today-2}}\n  end-date: {{template:today+14}}\n  chart-conditions: type = Work\n  chart-title: Cumulative flow\n  y-title: Cards\n  chart-width: 900\n  chart-height: 400\n  series:\n    - conditions: status >= \"Proposed\"\n      color: '#eeefff'\n      label: Proposed\n    - conditions: status >= \"Ready\"\n      color: '#f28900'\n      label: Ready\n    - conditions: status >= \"Backlog\"\n      color: '#c9a400'\n      label: Backlog\n    - conditions: status >= \"In Progress\"\n      color: '#30f200'\n      label: In Progress\n    - conditions: status >= \"In Test\"\n      color: '#0088cc'\n      label: In Test\n    - conditions: status >= \"Completed\"\n      color: '#087300'\n      label: Completed\n}}</p></div></div><p>The <b>Kanban Board</b> tab shows every Work card by Status, with WIP limits of 2 on In Progress and In Test. New cards start in Proposed, owned by whoever creates them.</p>"
+    }
+  ]
+}

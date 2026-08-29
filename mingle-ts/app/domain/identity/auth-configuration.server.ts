@@ -12,10 +12,11 @@
  * Commands → events:
  *   ConfigureAuthentication → AuthenticationConfigured
  *
- * Public interface: `LdapSettings`, `OidcSettings`,
+ * Public interface: `LdapSettings`, `OidcSettings`, `SamlSettings`,
  * `AuthenticationConfiguration`, `configureAuthentication`,
  * `loadAuthenticationConfiguration`, `authenticationView`,
- * `DEFAULT_LDAP_SETTINGS`, `DEFAULT_OIDC_SETTINGS`.
+ * `DEFAULT_LDAP_SETTINGS`, `DEFAULT_OIDC_SETTINGS`,
+ * `DEFAULT_SAML_SETTINGS`.
  *
  * Owner context: Identity & Access. Handlers take the Drizzle handle
  * and the sealer as parameters.
@@ -31,12 +32,14 @@ import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import { authorizeSiteAdminAction } from "~/domain/identity/authorization.server";
 import { SEALED_PREFIX, type Sealer } from "~/domain/identity/sealer.server";
+import { parseLdapGroupMappings } from "~/domain/identity/ldap-group-sync.server";
 import type {
   AuthSourceKind,
   AuthenticationView,
   FieldErrors,
   LdapSettingsView,
   OidcSettingsView,
+  SamlSettingsView,
 } from "~/shared/wire-types";
 
 /** LDAP settings with the bind password in the clear (in memory only). */
@@ -49,10 +52,13 @@ export interface OidcSettings extends Omit<OidcSettingsView, "clientSecretSet"> 
   clientSecret: string;
 }
 
+/** SAML settings carry no secret (P-9): the view is the settings. */
+export type SamlSettings = SamlSettingsView;
 /** Everything the sign-in adapters need, decrypted. */
 export interface AuthenticationConfiguration {
   ldap: LdapSettings;
   oidc: OidcSettings;
+  saml: SamlSettings;
 }
 
 export const DEFAULT_LDAP_SETTINGS: LdapSettings = {
@@ -68,7 +74,9 @@ export const DEFAULT_LDAP_SETTINGS: LdapSettings = {
   groupDn: "",
   groupObjectClass: "",
   groupAttribute: "",
-  autoEnroll: true,
+  autoEnroll: true,  startTls: false,
+  tlsCaCert: "",
+  groupMappings: "",
 };
 
 export const DEFAULT_OIDC_SETTINGS: OidcSettings = {
@@ -81,18 +89,37 @@ export const DEFAULT_OIDC_SETTINGS: OidcSettings = {
   autoEnroll: true,
 };
 
-/** The one secret field of each kind, sealed at rest. */
-const SECRET_FIELD: Record<AuthSourceKind, "bindPassword" | "clientSecret"> = {
+export const DEFAULT_SAML_SETTINGS: SamlSettings = {
+  enabled: false,
+  displayName: "Corporate sign-in (SAML)",
+  entryPoint: "",
+  idpIssuer: "",
+  idpCert: "",
+  spEntityId: "",
+  loginAttribute: "",
+  nameAttribute: "",
+  emailAttribute: "",
+  autoEnroll: true,
+};
+
+/** The one secret field of each kind, sealed at rest (SAML has none). */
+const SECRET_FIELD: Partial<Record<AuthSourceKind, "bindPassword" | "clientSecret">> = {
   ldap: "bindPassword",
   oidc: "clientSecret",
 };
 
-type Settings = LdapSettings | OidcSettings;
+type Settings = LdapSettings | OidcSettings | SamlSettings;
+
+const DEFAULTS: Record<AuthSourceKind, Settings> = {
+  ldap: DEFAULT_LDAP_SETTINGS,
+  oidc: DEFAULT_OIDC_SETTINGS,
+  saml: DEFAULT_SAML_SETTINGS,
+};
 
 /** Reads a kind's stored settings (secret still sealed), defaults applied. */
 function storedSettings(db: BetterSQLite3Database, kind: AuthSourceKind): Settings {
   const row = db.select().from(authConfigurations).where(eq(authConfigurations.kind, kind)).get();
-  const defaults = kind === "ldap" ? DEFAULT_LDAP_SETTINGS : DEFAULT_OIDC_SETTINGS;
+  const defaults = DEFAULTS[kind];
   const parsed = row ? (JSON.parse(row.settings) as Partial<Settings>) : {};
   return { ...defaults, ...parsed, enabled: row?.enabled ?? false } as Settings;
 }
@@ -107,9 +134,17 @@ function trimmed<T extends object>(settings: T): T {
 /** Legacy-style presence checks for the fields a kind cannot work without. */
 function settingsErrors(kind: AuthSourceKind, settings: Settings): FieldErrors {
   const errors: FieldErrors = {};
-  const required = (field: keyof LdapSettings | keyof OidcSettings) => {
+  const required = (field: keyof LdapSettings | keyof OidcSettings | keyof SamlSettings) => {
     if (!(settings as unknown as Record<string, unknown>)[field]) errors[field] = ["can't be blank"];
   };
+  if (kind === "saml") {
+    const saml = settings as unknown as SamlSettings;
+    required("entryPoint");
+    if (saml.entryPoint && !/^https?:\/\/\S+$/i.test(saml.entryPoint)) errors.entryPoint = ["must be an http(s) URL"];
+    required("idpCert");
+    required("displayName");
+    return errors;
+  }
   if (kind === "ldap") {
     const ldap = settings as LdapSettings;
     required("url");
@@ -120,6 +155,9 @@ function settingsErrors(kind: AuthSourceKind, settings: Settings): FieldErrors {
     const groupFields = [ldap.groupDn, ldap.groupObjectClass, ldap.groupAttribute].filter(Boolean).length;
     if (groupFields !== 0 && groupFields !== 3)
       errors.groupDn = ["group DN, object class, and member attribute must be given together"];
+    if (ldap.startTls && /^ldaps:/i.test(ldap.url)) errors.startTls = ["applies to ldap:// URLs; an ldaps:// URL is already TLS"];
+    const mappingErrors = parseLdapGroupMappings(ldap.groupMappings).errors;
+    if (mappingErrors.length > 0) errors.groupMappings = mappingErrors;
   } else {
     const oidc = settings as OidcSettings;
     required("issuer");
@@ -135,7 +173,7 @@ function settingsErrors(kind: AuthSourceKind, settings: Settings): FieldErrors {
 export interface ConfigureAuthenticationInput {
   kind: AuthSourceKind;
   /** The full settings for the kind; a blank secret keeps the stored one. */
-  settings: LdapSettings | OidcSettings;
+  settings: LdapSettings | OidcSettings | SamlSettings;
   actorUserId: number;
 }
 
@@ -149,7 +187,8 @@ export interface ConfigureAuthenticationInput {
  * enabled — never the settings — in one transaction.
  * REJECTS: actor not a site admin; a required field blank (`url`,
  * `baseDn`, `loginAttribute`, `objectClass` for LDAP; `issuer`,
- * `clientId`, `clientSecret` on first save, `displayName` for OIDC);
+ * `clientId`, `clientSecret` on first save, `displayName` for OIDC;
+ * `entryPoint`, `idpCert`, `displayName` for SAML);
  * a malformed URL; group fields given partially; OIDC scopes without
  * `openid`. Validation applies only when the source is enabled —
  * a disabled source may be saved half-filled.
@@ -160,21 +199,21 @@ export function configureAuthentication(
   db: BetterSQLite3Database,
   sealer: Sealer,
   input: ConfigureAuthenticationInput,
-): CommandResult<LdapSettingsView | OidcSettingsView> {
+): CommandResult<LdapSettingsView | OidcSettingsView | SamlSettingsView> {
   const denied = authorizeSiteAdminAction(db, input.actorUserId);
   if (denied) return denied;
 
   const secretField = SECRET_FIELD[input.kind];
   const current = storedSettings(db, input.kind) as unknown as Record<string, unknown>;
   const posted = trimmed(input.settings) as unknown as Record<string, unknown>;
-  const postedSecret = String(posted[secretField] ?? "");
-  const sealedSecret = postedSecret ? sealer.seal(postedSecret) : String(current[secretField] ?? "");
-  const effective = { ...posted, [secretField]: sealedSecret ? "set" : "" } as unknown as Settings;
+  const postedSecret = secretField ? String(posted[secretField] ?? "") : "";
+  const sealedSecret = secretField ? (postedSecret ? sealer.seal(postedSecret) : String(current[secretField] ?? "")) : "";
+  const effective = (secretField ? { ...posted, [secretField]: sealedSecret ? "set" : "" } : posted) as unknown as Settings;
   if (effective.enabled) {
     const errors = settingsErrors(input.kind, effective);
     if (Object.keys(errors).length > 0) return { ok: false, errors };
   }
-  const toStore = { ...posted, [secretField]: sealedSecret };
+  const toStore = secretField ? { ...posted, [secretField]: sealedSecret } : { ...posted };
   delete (toStore as Record<string, unknown>).enabled;
 
   return db.transaction((tx) => {
@@ -194,14 +233,15 @@ export function configureAuthentication(
       payload: { kind: input.kind, enabled: values.enabled },
       actorUserId: input.actorUserId,
     });
-    return { ok: true, value: viewOf(input.kind, tx) } as CommandResult<LdapSettingsView | OidcSettingsView>;
+    return { ok: true, value: viewOf(input.kind, tx) } as CommandResult<LdapSettingsView | OidcSettingsView | SamlSettingsView>;
   });
 }
 
 /** The admin-page view of one kind: secret replaced by a presence flag. */
-function viewOf(kind: AuthSourceKind, db: BetterSQLite3Database): LdapSettingsView | OidcSettingsView {
+function viewOf(kind: AuthSourceKind, db: BetterSQLite3Database): LdapSettingsView | OidcSettingsView | SamlSettingsView {
   const settings = storedSettings(db, kind) as unknown as Record<string, unknown>;
   const secretField = SECRET_FIELD[kind];
+  if (!secretField) return settings as unknown as SamlSettingsView;
   const { [secretField]: sealed, ...rest } = settings;
   const flag = kind === "ldap" ? "bindPasswordSet" : "clientSecretSet";
   return { ...rest, [flag]: typeof sealed === "string" && sealed.startsWith(SEALED_PREFIX) } as unknown as
@@ -215,7 +255,11 @@ function viewOf(kind: AuthSourceKind, db: BetterSQLite3Database): LdapSettingsVi
  * @param db - the Drizzle handle
  */
 export function authenticationView(db: BetterSQLite3Database): AuthenticationView {
-  return { ldap: viewOf("ldap", db) as LdapSettingsView, oidc: viewOf("oidc", db) as OidcSettingsView };
+  return {
+    ldap: viewOf("ldap", db) as LdapSettingsView,
+    oidc: viewOf("oidc", db) as OidcSettingsView,
+    saml: viewOf("saml", db) as SamlSettingsView,
+  };
 }
 
 /**
@@ -237,8 +281,10 @@ export function loadAuthenticationConfiguration(db: BetterSQLite3Database, seale
   };
   const ldap = storedSettings(db, "ldap") as LdapSettings;
   const oidc = storedSettings(db, "oidc") as OidcSettings;
+  const saml = storedSettings(db, "saml") as unknown as SamlSettings;
   return {
     ldap: { ...ldap, bindPassword: open(ldap.bindPassword) },
     oidc: { ...oidc, clientSecret: open(oidc.clientSecret) },
+    saml,
   };
 }

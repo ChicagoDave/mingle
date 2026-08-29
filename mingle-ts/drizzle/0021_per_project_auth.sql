@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `permitted_strategy_kinds` text DEFAULT '[]' NOT NULL;

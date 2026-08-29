@@ -59,6 +59,14 @@ export const favorites = sqliteTable(
      * null when the view filters simply. When set, `filters` is `[]`.
      */
     mql: text("mql"),
+    /**
+     * JSON object of lane value → count limit (P-3; legacy
+     * `wip_limits` view params, count type only). Meaningful on team
+     * grid favorites; `{}` otherwise. Keyed by the lane's stored value,
+     * so it shares `group_by`'s exposure to an enumeration-value rename
+     * (ADR-0012) — neither is rewritten today because no rename exists.
+     */
+    wipLimits: text("wip_limits").notNull().default("{}"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),

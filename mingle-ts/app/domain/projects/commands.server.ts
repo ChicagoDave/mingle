@@ -17,6 +17,7 @@
  *   DefineProjectVariable  → ProjectVariableDefined
  *
  * Public interface: `createProject`, `updateProjectSettings`,
+ * `setProjectAuthenticationConstraint`.
  * `defineProjectVariable`, `generateProjectIdentifier`.
  *
  * Owner context: Card Management. Handlers take the Drizzle handle as a
@@ -33,7 +34,7 @@ import {
 } from "~/db/schema/projects";
 import { teamMemberships } from "~/db/schema/membership";
 import { cardTypes } from "~/db/schema/cards";
-import { PROJECT_VARIABLE_DATA_TYPES } from "~/shared/wire-types";
+import { PROJECT_VARIABLE_DATA_TYPES, STRATEGY_KINDS, type StrategyKind } from "~/shared/wire-types";
 import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import {
@@ -214,6 +215,58 @@ export function createProject(
       aggregateType: "Project",
       aggregateId: row.id,
       payload: { name: "Card" },
+      actorUserId: input.actorUserId,
+    });
+    return { ok: true, value: row } as CommandResult<ProjectRow>;
+  });
+}
+
+export interface SetProjectAuthenticationConstraintInput {
+  projectId: number;
+  /** The strategy kinds the project admits; empty removes the constraint. */
+  permittedStrategyKinds: string[];
+  actorUserId: number;
+}
+
+/**
+ * SetProjectAuthenticationConstraint — declares which sign-in
+ * strategy kinds a project admits (ADR-0021 Decisions 2 and 6).
+ *
+ * DOES: updates `projects.permitted_strategy_kinds` (deduplicated, in
+ * STRATEGY_KINDS order, `updated_at` stamped) and appends a
+ * ProjectAuthenticationConstraintSet event, in one transaction. Runs no
+ * membership command and fires no membership event: members who do not
+ * satisfy the constraint stay on the team and are refused at the
+ * checkpoint until they sign in through a permitted strategy.
+ * REJECTS: unknown project; actor below project administrator; a kind
+ * outside STRATEGY_KINDS.
+ *
+ * @returns the updated project row, or field errors
+ */
+export function setProjectAuthenticationConstraint(
+  db: BetterSQLite3Database,
+  input: SetProjectAuthenticationConstraintInput,
+): CommandResult<ProjectRow> {
+  const current = db.select().from(projects).where(eq(projects.id, input.projectId)).get();
+  if (!current) return reject("project", "does not exist");
+  const denied = authorizeProjectAction(db, input.actorUserId, input.projectId, PrivilegeLevel.PROJECT_ADMIN);
+  if (denied) return denied;
+  const unknown = input.permittedStrategyKinds.find((kind) => !(STRATEGY_KINDS as readonly string[]).includes(kind));
+  if (unknown !== undefined) return reject("permittedStrategyKinds", `'${unknown}' is not a sign-in strategy`);
+  const permitted = STRATEGY_KINDS.filter((kind) => input.permittedStrategyKinds.includes(kind)) as StrategyKind[];
+
+  return db.transaction((tx) => {
+    const row = tx
+      .update(projects)
+      .set({ permittedStrategyKinds: JSON.stringify(permitted), updatedAt: new Date() })
+      .where(eq(projects.id, input.projectId))
+      .returning()
+      .get();
+    emitEvent(tx, {
+      type: "ProjectAuthenticationConstraintSet",
+      aggregateType: "Project",
+      aggregateId: input.projectId,
+      payload: { permittedStrategyKinds: permitted },
       actorUserId: input.actorUserId,
     });
     return { ok: true, value: row } as CommandResult<ProjectRow>;

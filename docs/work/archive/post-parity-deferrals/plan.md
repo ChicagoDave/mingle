@@ -1,7 +1,7 @@
 # Session Plan: Implement the post-parity-deferrals proposal (P-1 through P-17)
 
 **Created**: 2026-08-28
-**Plan Status**: ACTIVE
+**Plan Status**: DONE (2026-08-29 — all 14 phases complete; P-1 through P-17 delivered)
 **Overall scope**: Build all 17 ACCEPTED items from `docs/proposals/post-parity-deferrals.md` — the capabilities consciously deferred out of Phases 30–33 of the completed `mingle-ts-full-parity` plan (API breadth, per-project auth, LDAP/SAML, integrations, packaging, scheduling, metrics) plus the visual-parity gap found after that plan closed (no site chrome, 13 unstyled routes).
 **Bounded contexts touched**: Frontend UI / site chrome (P-16, P-17); API / Service `/api/v1` (P-1, P-2, P-3, P-4); Identity & Access — auth, LDAP, SAML, API credentials (P-5, P-6, P-7, P-8, P-9); Integrations — Slack, GitHub, GitLab, Bitbucket (P-10, P-11, P-12); Cloud Infrastructure — registry image and CI (P-13); Pub/Sub & Messaging — scheduler and backups (P-14); Observability (P-15).
 **Key domain language**: site chrome, form-page parity, cursor pagination, permitted-strategy-kind constraint, bearer key / HMAC signing secret, sealed secret, transactional outbox, schedule dedupe key (`<schedule>:<next_run_at>`), delivery cursor.
@@ -34,7 +34,7 @@
 - **Entry state**: Working tree has the uncommitted root-redirect/sign-in changes from this session; `root.tsx` still renders the React Router scaffold shell (Inter font link, `dark:` variants, `@theme` block); no site chrome exists.
 - **Deliverable**: Implements P-16. `root.tsx` renders the legacy application shell harvested from `mingle/app/views/layouts/application.rhtml` and its partials (`_application_hd.rhtml` header: logo, project name, user menu; `_tabs.rhtml` project tab bar fed by the Phase 11 favorites/tabs read model per ADR-0005; `_flash.rhtml`; `_footbar.rhtml`), styles ported from `mingle/app/assets/stylesheets/{application,base,common/*}.scss` into plain CSS under `app/styles/` following the `card-list.css`/`card-grid.css` precedent, scaffold remnants removed, every project route rendering inside the shell.
 - **Exit state**: A behavior test asserts a signed-in project page's HTML carries the header, tab bar, and footer; the shell has been reviewed side by side against the legacy layout per ADR-0001; `cd mingle-ts && npm run verify` passes.
-- **Status**: CURRENT (since 2026-08-28)
+- **Status**: DONE (2026-08-29) — exit criteria met: `test/site-chrome.behavior.test.tsx` (9 tests) drives the real root loader and renders `SiteChrome` to the server's HTML, asserting header, `#hd-nav` tab bar, `#bd`/`#flash` body, and `#ft` footbar; shell screenshotted on the dev server (sign-in, project list, card list, favorite tab, history) and compared against `application.rhtml`/`_application_hd.rhtml`/`_tabs.rhtml`/`_footbar.rhtml`; `npm run verify` green (44 files, 1086 tests). Not carried: search box and murmur badge (no route/Firebase in the port), Source tab (no repository integration), tab reordering/renaming. ADR-0001 wording amended to `mingle/app/assets/stylesheets`.
 
 ### Phase 2: Form-page parity for the thirteen unstyled routes
 - **Tier**: Large
@@ -43,7 +43,7 @@
 - **Entry state**: Phase 1 done — `root.tsx` renders the legacy shell and every project route already renders inside it.
 - **Deliverable**: Implements P-17. Each of `login`, `register`, `projects` (index), `projects.new`, `projects.settings`, `projects.team`, `projects.groups`, `projects.transitions`, `projects.integrations`, `projects.cards.new`, `profile`, and `admin.authentication` is rebuilt from its legacy view (`users/login.rhtml`, `users/new.rhtml`, `projects/index`/`projects/new.rhtml`, project settings, `team/`, `groups/index.rhtml`, `transitions/`, profile views, plus `account.scss`/`action_bar.scss` and view-specific stylesheets); routes with no legacy counterpart (`projects.integrations`, `admin.authentication`) reuse the legacy settings-page structure.
 - **Exit state**: A test fails if any route module under `app/routes/` renders a page without a stylesheet import or class attribute; each page reviewed side by side against its legacy template per ADR-0001; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `test/route-styling.behavior.test.ts` fails on any `.tsx` page route (default component export; the 17 `.ts` resource routes are out of scope per plan-review) without a stylesheet import or class attribute, and pins the twelve P-17 routes to the harvested primitives; all twelve rebuilt on `app/components/forms.tsx` (ActionBar, FormItem, ErrorLines, FlashBox, AdminPage with the legacy `#admin-nav` sidebar) and `app/styles/forms.css` plus per-page `login.css`/`projects-list.css`/`profile.css`/`transitions.css`/`card-new.css`; header pills (Programs/Projects/Admin) added to the chrome for non-project pages; every page screenshotted on the dev server and compared with its legacy template; `npm run verify` green (45 files, 1089 tests).
 
 ### Phase 3: Prebuilt registry image and tag-driven CI
 - **Tier**: Large
@@ -52,7 +52,7 @@
 - **Entry state**: Phase 2 done; no `.github/workflows` exists anywhere in the repo (confirmed in `session-20260828-2134-main.md`); `npm run verify` is the standing gate but runs unattended nowhere yet.
 - **Deliverable**: Implements P-13 per ADR-0022. A GitHub Actions workflow runs `cd mingle-ts && npm run verify` as the gate on every push to `main` (advisory) and, on a `v<major>.<minor>.<patch>` tag, builds and pushes a multi-arch (`linux/amd64`, `linux/arm64`) image to `ghcr.io/chicagodave/mingle` tagged with the exact version, its minor line, and `latest`; `compose.yaml` pulls by minor line; `compose.build.yaml` restores `build: .` for the source-build override.
 - **Exit state**: Both `test/install.real.test.ts` (build-from-source path) and the new `test/image.real.test.ts` (registry pull path — asserts image reference, `healthy` status, `/healthz` db:connected, and the `org.opencontainers.image.version` label match the tag) pass end to end through Docker; rule 13a Integration Reality Statement produced before declaring complete; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `.github/workflows/verify-and-publish.yml` (advisory gate on push to main; gate → multi-arch buildx → push `<version>`/`<minor>`/`latest` on `v*` tags, `GITHUB_TOKEN` only), `compose.yaml` pulls `ghcr.io/chicagodave/mingle:1.0`, `compose.build.yaml` restores the source build, Dockerfile stamps OCI version/revision/source labels from build-args, README rewritten to "save compose.yaml and up"; `npm run test:install` (build path, 3/3) and `npm run test:image` (3/3 against the image built locally as `ghcr.io/chicagodave/mingle:1.0` with `MINGLE_VERSION=1.0.0`) both green; Integration Reality Statement produced. Open until the first tag: the workflow has not run on a GitHub runner and the image has not been pulled from ghcr.io — `git tag v1.0.0 && git push --tags` is the owner's step. `npm run verify` green (45 files, 1089 tests).
 
 ### Phase 4: List filtering and pagination on `/api/v1` collections
 - **Tier**: Medium
@@ -61,7 +61,7 @@
 - **Entry state**: Phase 3 done (CI now runs the gate on every push); the Phase 30/31 `/api/v1` routes exist with no `limit`/`cursor` support.
 - **Deliverable**: Implements P-1. Every `/api/v1` collection route accepts `limit` and `cursor` query parameters; the card list route additionally accepts filter parameters; responses carry a next-cursor in the envelope. Cursor paging is recorded as a deliberate departure from legacy's `page=`.
 - **Exit state**: A behavior test walks a multi-page result end to end via the cursor; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `app/api/pagination.server.ts` (keyset cursors: opaque base64url sort keys, `?limit=` default 50 / max 200 clamped, 400 on bad limit or foreign cursor) applied to all six collection routes (projects by name, card types and definitions by position, transitions and available transitions by name, cards by number desc); every collection answers `ApiPage<T> = { items, nextCursor }`; the card list accepts the list page's `filters[]` / `filters[mql]` wire shapes via `buildCardListView`/`queryCardList` (400 with the page's messages on an invalid filter); `test/api-v1.behavior.test.ts` walks a 3-page card list end to end with an insert mid-walk (unshifted), walks projects/definitions/transitions/available transitions, rejects bad limits and cursors, and covers simple, not-set, combined, and MQL filters with paging; README API section records cursor paging as the departure from legacy `page=`. `npm run verify` green (45 files, 1093 tests).
 
 ### Phase 5: Card types, transitions, attachments, murmurs, and wiki over `/api/v1`
 - **Tier**: Large
@@ -70,7 +70,7 @@
 - **Entry state**: Phase 4 done — pagination exists on collection routes these new resources will reuse.
 - **Deliverable**: Implements P-2 and P-3. `/api/v1` exposes create/delete for card types and transitions with the same validation the UI applies (transition edit stays delete-and-recreate per ADR-0007; a nil `has_specific_value` prerequisite crosses the wire as JSON null per ADR-0010); attachments, murmurs, and wiki pages get list/get/create routes that call the existing page, murmur, and attachment commands so ADR-0011 sanitization, ADR-0017 post-time mention resolution, and ADR-0012 reference rules are inherited rather than re-implemented; attachments round-trip a file body.
 - **Exit state**: Behavior tests cover each operation, including a rejected invalid card-type/transition definition; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: new `DeleteCardType` domain command (legacy `can_be_destroy?` rules, restricted transitions go with the type, `CardTypeDeleted`); routes `card_types` POST, `card_types/:id` GET/DELETE, `transitions` POST (names resolved to ids; `value: null` prerequisite stored as the nil HasSpecificValue per ADR-0010; `usedBy` users/groups), `transitions/:id` GET/DELETE (no PATCH — ADR-0007), `pages` GET/POST + `pages/:pagename` GET (CreatePage sanitizes, ADR-0011), `murmurs` GET/POST + `murmurs/:id` GET (PostMurmur resolves mentions/links, ADR-0017), `cards/:number/attachments` GET/POST (multipart, bytes round-trip) + `attachments/:attachmentId` GET; 15 new tests in `test/api-v1.behavior.test.ts` covering each operation and each rejection with state assertions; mutation-verification clean; `npm run verify` green (45 files, 1108 tests).
 
 ### Phase 6: API reference document
 - **Tier**: Small
@@ -79,7 +79,7 @@
 - **Entry state**: Phases 4 and 5 done — the full `/api/v1` route set (pagination, card types/transitions, attachments/murmurs/wiki) exists.
 - **Deliverable**: Implements P-4. A reference document under `mingle-ts/docs/` describes every `/api/v1` route, the auth modes (bearer, HMAC), the response envelope, and the status-code mapping ADR-0020 fixes.
 - **Exit state**: A test compares the documented route set against `app/routes.ts` so drift fails the suite; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `mingle-ts/docs/api-v1.md` documents authentication (bearer and HMAC signing contract), the `ApiPage` envelope and cursor paging, the status mapping, and all 16 `/api/v1` routes with methods and resources; `test/api-docs.behavior.test.ts` fails on any route in `app/routes.ts` without a row, any row without a route, and any documented method the module cannot serve (or handled method left undocumented); `npm run verify` green.
 
 ### Phase 7: Per-project authentication settings
 - **Tier**: Large
@@ -88,7 +88,7 @@
 - **Entry state**: Phase 2 done (project settings and team pages carry chrome and styling to add the constraint control to); ADR-0021 ACCEPTED.
 - **Deliverable**: Implements P-5 per ADR-0021. A project admin sets a permitted-strategy-kind constraint in project settings; sessions record their strategy kind; the checkpoint enforces the constraint on reads and writes in order trump → constraint → role rank; API principals are judged by linked identities (`external_identities`); membership is never changed by the constraint and the team list badges non-qualifying members via the same predicate function the checkpoint uses.
 - **Exit state**: Tests cover a refused session, a refused API key, the same user passing after an SSO sign-in, the site-admin bypass, no membership event fired on set, and fall-through when no constraint is set; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `projects.permitted_strategy_kinds` (migration 0021), `SetProjectAuthenticationConstraint` command (project admin; no membership change; `ProjectAuthenticationConstraintSet`), the request principal (`app/domain/identity/principal.server.ts`, AsyncLocalStorage entered by root middleware), the predicate (`access-constraint.server.ts`) applied inside `privilegeLevelFor`/`authorizeProjectAction` in the order trump → constraint → role rank, sessions record their strategy kind (`createUserSession(..., kind)`; login/register/OIDC pass it; a cookie without a kind satisfies no constraint — the ADR-0021 gap named in the prior session's open items, now stated in principal.server.ts), read-side gate in root middleware (403 with the constraint's message), API principals judged by `external_identities` in `requireApiUser`, settings page section and team-list badge via the same predicate; `test/project-authentication.behavior.test.ts` (13 tests) covers every named scenario; `npm run verify` green (47 files, 1123 tests).
 
 ### Phase 8: Signing-secret rotation UI
 - **Tier**: Small
@@ -97,7 +97,7 @@
 - **Entry state**: Phase 2 done (profile page carries chrome/styling); Phase 31's API key/HMAC secret minting exists.
 - **Deliverable**: Implements P-8. A user rotates the HMAC signing secret of one of their own API keys from the profile page, with an overlap window during which requests signed with the previous secret are still accepted.
 - **Exit state**: Tests cover both sides of the window boundary (accepted just inside, rejected just after); `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `RotateSigningSecret` command (owner only; new secret sealed, replaced secret kept in `previous_signing_secret_sealed` until `previous_secret_expires_at = now + 24h`, `ApiKeySigningSecretRotated`; migration 0022), `verifySignedRequest` accepts the previous secret only inside the window, profile page `rotate-signing-secret` intent with the one-time secret and the window shown per key, docs/api-v1.md updated; `test/signing-secret-rotation.behavior.test.ts` (5 tests) covers just-inside/just-after the boundary, single previous secret, owner-only, and the profile intent; `npm run verify` green (48 files, 1128 tests).
 
 ### Phase 9: SAML sign-in strategy
 - **Tier**: Large
@@ -106,7 +106,7 @@
 - **Entry state**: Phase 2 done (admin.authentication page carries chrome/styling); Phase 31's `signInExternalUser` path and OIDC real-provider test pattern exist.
 - **Deliverable**: Implements P-9. SAML 2.0 (SP-initiated, HTTP-POST binding) is a selectable strategy on the authentication admin page, mapped to `users` rows through the same `signInExternalUser` path as OIDC. CAS is not carried.
 - **Exit state**: Verified against a real identity provider in test the way OIDC was in Phase 31 (rule 13a real-path test); `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `saml` added to AUTH_SOURCE_KINDS with `SamlSettingsView`/`DEFAULT_SAML_SETTINGS` (no secret; entry point, IdP issuer and certificate, SP entity id, attribute mapping, auto-enrol) editable on the authentication admin page; `app/auth/saml-client.server.ts` (SP via `@node-saml/node-saml`: HTTP-Redirect AuthnRequest, HTTP-POST Response validated for signature, audience, InResponseTo and validity window, claims → `signInExternalUser`), routes `/auth/saml`, `/auth/saml/callback` (session kind `saml`), `/auth/saml/metadata`; login page lists every enabled SSO source. Harness named and used: `samlify`'s IdP in-process with an openssl-minted key — `test/saml.behavior.test.ts` (6 tests: metadata/login offer, enrol, link + re-login, tampered/no-cookie/replayed, foreign certificate, disabled → 404). Integration Reality Statement produced. `npm run verify` green.
 
 ### Phase 10: LDAP group sync and StartTLS
 - **Tier**: Medium
@@ -115,7 +115,7 @@
 - **Entry state**: Phase 2 done (admin.authentication page, where the LDAP config and the group-mapping UI beside it live, carries chrome/styling); Phase 31's LDAP bind auth exists.
 - **Deliverable**: Implements P-6 and P-7. Configured LDAP group DNs map to Mingle project groups, with the mapping living beside the site-level LDAP configuration; membership is reconciled on each LDAP login. LDAP configuration accepts a StartTLS flag and the bind path upgrades the connection before binding when set.
 - **Exit state**: Tests cover a user gaining and losing a Mingle group across two logins, plus a real-path test exercising StartTLS against the test directory (rule 13a); `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: LDAP settings gain `startTls`, `tlsCaCert`, and `groupMappings` (`<group DN> => <project>/<group>` per line, validated at configuration time) on the authentication admin page; `app/auth/ldap-directory.server.ts` upgrades with StartTLS before the first bind (CA to `startTLS()`; to the constructor only for ldaps:// — ldapts reads constructor tlsOptions as LDAPS); `app/domain/identity/ldap-group-sync.server.ts` reconciles mapped Mingle groups on every LDAP sign-in (adds team + group membership, removes group membership only, one `LdapGroupsReconciled` event, idempotent); `test/ldap-group-sync.behavior.test.ts` (ldapjs, membership changed between two sign-ins) and `test/ldap-starttls.real.test.ts` (OpenLDAP in Docker with a minted CA/cert: trusted CA signs in, wrong CA and system store refused, plain still works) — `npm run test:ldap-tls` 3/3; mutation-verification's two findings (missing ldaps+StartTLS rejection test; expired baked-in CA) both fixed; `npm run verify` green (50 files, 1137 tests).
 
 ### Phase 11: Slack per-event filters and webhook mapping UI
 - **Tier**: Medium
@@ -124,7 +124,7 @@
 - **Entry state**: Phase 2 done (projects.integrations page carries chrome/styling); Phase 32's Slack incoming-webhook notifier exists.
 - **Deliverable**: Implements P-10. An admin registers more than one incoming-webhook URL per project (a webhook is bound to its channel at creation, so channel routing is URL routing), maps history event types to URLs, and suppresses individual event types; each URL is its own delivery cursor under ADR-0018.
 - **Exit state**: Tests cover a routed event, a suppressed event, and the default-URL fall-through; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `slack_integrations` holds any number of webhooks per project with one `is_default` (migration 0023 promotes existing rows); `slack_event_routes` maps `SLACK_EVENT_TYPES` (`kind.action`) to a webhook or null = suppressed; commands `addSlackWebhook`, `setDefaultSlackWebhook`, `routeSlackEvents`, `removeSlackIntegration(integrationId)` (routes dropped, successor promoted); `deliverSlackNotifications` walks every enabled webhook on its own cursor (ADR-0018), posting only what is routed to it or unrouted-to-the-default, skipping suppressed types, recording a failing webhook's error without blocking the others; integrations page lists webhooks, adds one, moves the default, and edits the per-event routing table; `test/integrations.behavior.test.ts` gains four tests (routed event to the second webhook, suppressed event, default fall-through with both cursors at the end, failing webhook isolated and retried) plus route-level intents; `npm run verify` green.
 
 ### Phase 12: GitHub pull-request/status events and GitLab/Bitbucket push receivers
 - **Tier**: Large
@@ -133,7 +133,7 @@
 - **Entry state**: Phase 11 done (webhook/delivery-cursor infrastructure exercised); Phase 32's GitHub receiver and commit→card linking exist.
 - **Deliverable**: Implements P-11 and P-12. The GitHub receiver handles `pull_request` and `status` payloads, links pull requests to cards alongside existing commit links, and posts murmurs for them. GitLab (shared-token header) and Bitbucket (HMAC signature) push receivers, each verifying a per-integration sealed secret in its adapter per ADR-0020, link commits to cards and post murmurs the way the GitHub receiver does.
 - **Exit state**: Signed-payload tests cover each new GitHub event type and verification-failure/success tests cover each new receiver; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `github_integrations.provider` (github/gitlab/bitbucket; migration 0024) with each host's own system user authoring murmurs; `pull_request_links` and commit-status columns on `commit_links`; `receiveGithubPullRequest` (links by `#123` in title/body, state follows edits/close/merge, murmurs opened/reopened/ready/closed/merged) and `receiveGithubStatus` (status recorded per linked commit, murmur for non-pending) dispatched from the GitHub webhook by `X-GitHub-Event`; `scm-receivers.server.ts` verifies GitLab's `X-Gitlab-Token` and Bitbucket's `X-Hub-Signature` against the sealed per-integration secret and normalizes both push payloads onto the shared `receiveGithubPush`; routes `/projects/:identifier/gitlab/webhook` and `/bitbucket/webhook`; integrations page registers a repository per host and lists per-host payload URLs; card page shows pull requests and commit statuses; five new signed-payload tests (PR opened→edited→merged, unsigned/unrelated/malformed PR, status pending→success→unlinked→unsigned, GitLab token success/failure/redelivery/ignored/404, Bitbucket signature success/failure/ignored/malformed); `npm run verify` green.
 
 ### Phase 13: Scheduled backups
 - **Tier**: Large
@@ -142,7 +142,7 @@
 - **Entry state**: Phase 2 done (profile page carries the `time_zone` field's chrome/styling); ADR-0023 ACCEPTED.
 - **Deliverable**: Implements P-14 per ADR-0023. The in-process scheduler (`schedules` rows edited on `/admin/schedules`, one-minute UTC tick, `<schedule>:<next_run_at>` dedupe) runs a backup handler that writes a restorable archive of the database (SQLite online backup, never a file copy) and attachments to `BACKUPS_DIR`, keeping the newest `BACKUP_KEEP`; `users.time_zone` exists as a profile setting for display.
 - **Exit state**: Tests cover restart/overlap dedupe, retention-after-failure, and a restore into a fresh instance asserting data parity with the source; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `schedules` table seeded with the disabled `backup` row at `0 3 * * *` and `users.time_zone` (migration 0025); `app/jobs/cron.server.ts` (five-field UTC cron, next occurrence); `app/jobs/scheduler.server.ts` (`tickScheduler` enqueues one job per due schedule with dedupe key `<key>:<next_run_at>` and advances the row in the same transaction, missed windows collapse to one run, a cron that stops parsing disables the row; `updateSchedule`, `runScheduleNow` with `<key>:manual:<now>`, `recordScheduleOutcome`; `ensureScheduler` started beside the worker in entry.server); `app/jobs/backup.server.ts` (`runBackup`: `<BACKUPS_DIR>/<UTC stamp>/mingle.db` via better-sqlite3's online `backup()` plus an attachments copy, keep-last-`BACKUP_KEEP` applied only after success, partial archive removed on failure) registered as the `backup` job handler; `/admin/schedules` (site admin: edit expression/enabled, run now, next/last run shown in the admin's zone); profile time-zone setting validated with `Intl`; Dockerfile `BACKUPS_DIR=/data/backups`; README backups section. `test/scheduler.behavior.test.ts` (cron table, due/overlap/restart/clock-jump dedupe, missed-window once, disabling, update/run-now/outcome, admin route) and `test/backup.behavior.test.ts` (archive contents, restore into a fresh migrated instance with row parity and `integrity_check`, retention after success and never on failure, env defaults, the job recording ok/failed); `npm run verify` green.
 
 ### Phase 14: Metrics beyond `/healthz`
 - **Tier**: Small
@@ -151,4 +151,4 @@
 - **Entry state**: Phase 13 done; the outbox/queue-depth data it exposes exists from ADR-0018/ADR-0023 work.
 - **Deliverable**: Implements P-15. A `/metrics` endpoint exposes request count, latency, and outbox/queue depth in Prometheus exposition format, served only to a request bearing a valid API key through the existing `/api/v1` bearer auth (no new credential kind, per ADR-0020).
 - **Exit state**: Tests assert the counters move after requests are made and that an unauthenticated scrape gets 401; `npm run verify` passes.
-- **Status**: NOT STARTED
+- **Status**: DONE (2026-08-29) — exit criteria met: `app/observability/metrics.server.ts` (in-process request counter by method/status and latency histogram per method, recorded for every request by the root middleware including refused ones; Prometheus text exposition 0.0.4 with `mingle_jobs{status}`, `mingle_jobs_oldest_pending_age_seconds`, `mingle_schedules_enabled`, and uptime read at scrape time — no metrics library); `GET /metrics` guarded by `requireApiUser` (bearer or HMAC; 401 with the API challenge otherwise); README Metrics section; `test/metrics.behavior.test.ts` (401 for anonymous and a wrong key, counters and histogram move across middleware passes, queue/schedule gauges from the database); `npm run verify` green.

@@ -1,0 +1,18 @@
+# Build-from-source override (ADR-0022 Decision 4).
+#
+# compose.yaml pulls the published image. Layer this file on top to build
+# the image from this checkout instead — for development, for a fork that
+# has not published its own image yet, or to run unreleased changes:
+#
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+#
+# test/install.real.test.ts exercises exactly this path; the plain
+# compose.yaml (registry pull) is exercised by test/image.real.test.ts.
+services:
+  app:
+    build:
+      context: .
+      args:
+        MINGLE_VERSION: ${MINGLE_VERSION:-0.0.0-dev}
+        MINGLE_REVISION: ${MINGLE_REVISION:-}
+    pull_policy: build
