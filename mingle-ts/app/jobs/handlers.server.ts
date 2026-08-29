@@ -12,8 +12,11 @@
  * Owner context: infrastructure (job queue) — the composition point
  * where domain delivery meets environment-configured adapters.
  */
-import { HISTORY_NOTIFICATIONS_JOB } from "~/domain/notifications.server";
+import { sealer } from "~/auth/sealer.server";
+import { deliverSlackNotifications } from "~/domain/integrations/slack.server";
+import { HISTORY_NOTIFICATIONS_JOB, INTEGRATION_DELIVERIES_JOB } from "~/domain/notifications.server";
 import { deliverHistoryNotifications } from "~/domain/subscriptions/notify.server";
+import { postToSlackWebhook } from "~/integrations/slack-poster.server";
 import type { JobHandlers } from "~/jobs/queue.server";
 import { type Mailer, smtpConfigFromEnv, smtpMailer } from "~/mail/mailer.server";
 
@@ -52,5 +55,12 @@ export const jobHandlers: JobHandlers = {
       projectId,
       siteUrl: siteUrlFromEnv(),
     });
+  },
+  [INTEGRATION_DELIVERIES_JOB]: async (db, payload) => {
+    const projectId = Number(payload.projectId);
+    if (!Number.isSafeInteger(projectId)) {
+      throw new Error(`integration_deliveries job carries no project id (${JSON.stringify(payload)})`);
+    }
+    await deliverSlackNotifications(db, sealer, postToSlackWebhook, { projectId, siteUrl: siteUrlFromEnv() });
   },
 };

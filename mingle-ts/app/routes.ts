@@ -37,6 +37,8 @@ export default [
   route("projects/:identifier/transitions", "routes/projects.transitions.tsx"),
   route("projects/:identifier/favorites", "routes/projects.favorites.tsx"),
   route("projects/:identifier/trees", "routes/projects.trees.tsx"),
+  route("projects/:identifier/integrations", "routes/projects.integrations.tsx"),
+  route("projects/:identifier/github/webhook", "routes/projects.github.webhook.ts"),
   route("projects/:identifier/trees/:treeId", "routes/projects.trees.tree.tsx"),
   route(
     "projects/:identifier/favorites/:favoriteId",

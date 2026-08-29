@@ -14,16 +14,22 @@
  * reads the trails from each subscription's cursor, so it never
  * depends on which edit scheduled it.
  *
+ * Since Phase 32 the same call also schedules the project's external
+ * notifiers (Slack) as a second, independently retried job, so a mail
+ * outage never blocks a chat post or vice versa.
+ *
  * Public interface: `scheduleHistoryNotification`,
- * `HISTORY_NOTIFICATIONS_JOB`.
+ * `HISTORY_NOTIFICATIONS_JOB`, `INTEGRATION_DELIVERIES_JOB`.
  *
  * Owner context: cross-context infrastructure (domain kernel).
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { enqueueJob } from "~/jobs/queue.server";
 
-/** The job type app/jobs/handlers.server.ts routes to delivery. */
+/** The job type app/jobs/handlers.server.ts routes to email delivery. */
 export const HISTORY_NOTIFICATIONS_JOB = "history_notifications";
+/** The job type app/jobs/handlers.server.ts routes to Slack delivery (Phase 32). */
+export const INTEGRATION_DELIVERIES_JOB = "integration_deliveries";
 
 /**
  * Enqueues one delivery run for the project, collapsing into a pending
@@ -41,5 +47,10 @@ export function scheduleHistoryNotification(
     type: HISTORY_NOTIFICATIONS_JOB,
     payload: { projectId },
     dedupeKey: `${HISTORY_NOTIFICATIONS_JOB}:${projectId}`,
+  });
+  enqueueJob(tx, {
+    type: INTEGRATION_DELIVERIES_JOB,
+    payload: { projectId },
+    dedupeKey: `${INTEGRATION_DELIVERIES_JOB}:${projectId}`,
   });
 }

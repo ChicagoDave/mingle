@@ -65,6 +65,7 @@ import {
 } from "~/files/attachment-storage.server";
 import { addCardComment } from "~/domain/murmurs/commands.server";
 import { cardDependencies } from "~/domain/dependencies/read.server";
+import { commitLinksForCard } from "~/domain/integrations/read.server";
 import { cardDiscussion } from "~/domain/murmurs/read.server";
 import { MurmurBody } from "~/components/murmur-body";
 import { requireUserId } from "~/auth/session.server";
@@ -209,6 +210,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     discussion: cardDiscussion(db, project.id, card.id),
     // Phase 25: what this card asked of other projects, and what it resolves.
     dependencies: cardDependencies(db, project.id, card.number),
+    // Phase 32: commits whose messages referenced this card.
+    commits: commitLinksForCard(db, card.id, card.number),
   };
 }
 
@@ -413,6 +416,7 @@ export default function CardPage() {
     transitions,
     discussion,
     dependencies,
+    commits,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const errors: FieldErrors =
@@ -678,6 +682,20 @@ export default function CardPage() {
         <input type="file" name="file" />{" "}
         <button type="submit">Attach file</button>
       </Form>
+
+      <h2>Commits</h2>
+      {commits.length === 0 ? (
+        <p>No commits reference this card.</p>
+      ) : (
+        <ul id="card-commits">
+          {commits.map((commit) => (
+            <li key={commit.sha}>
+              <a href={commit.url}>{commit.shortSha}</a> ({commit.repository}) by {commit.authorName} on{" "}
+              {commit.committedAt.slice(0, 10)}: {commit.message.split("\n")[0]}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h2>Dependencies</h2>
       {dependencies.raised.length === 0 && dependencies.resolving.length === 0 ? (

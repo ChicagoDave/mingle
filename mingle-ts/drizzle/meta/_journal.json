@@ -141,6 +141,13 @@
       "when": 1787965514119,
       "tag": "0019_external_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787969613008,
+      "tag": "0020_integrations",
+      "breakpoints": true
     }
   ]
 }

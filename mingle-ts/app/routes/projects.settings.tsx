@@ -212,6 +212,7 @@ export default function ProjectSettings() {
         <Link to={`/projects/${project.identifier}/groups`}>Groups</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/transitions`}>Transitions</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/trees`}>Trees</Link> ·{" "}
+        <Link to={`/projects/${project.identifier}/integrations`}>Integrations</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/cards`}>Cards</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/wiki`}>Pages</Link> ·{" "}
         <Link to={`/projects/${project.identifier}/murmurs`}>Murmurs</Link> ·{" "}

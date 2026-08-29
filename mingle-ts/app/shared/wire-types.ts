@@ -624,3 +624,39 @@ export interface AuthenticationView {
   ldap: LdapSettingsView;
   oidc: OidcSettingsView;
 }
+
+// ---------------------------------------------------------------------------
+// External Integrations (Phase 32) — what the project integrations page
+// and the card page show. Secrets (webhook URL, GitHub secret) never
+// cross the wire outbound.
+// ---------------------------------------------------------------------------
+
+/** The project's Slack notifier as the integrations page shows it. */
+export interface SlackIntegrationView {
+  configured: boolean;
+  enabled: boolean;
+  channelLabel: string;
+  lastDeliveredAt: string | null;
+  lastError: string | null;
+}
+
+/** One GitHub repository allowed to push to the project. */
+export interface GithubIntegrationView {
+  id: number;
+  repository: string;
+  enabled: boolean;
+  lastReceivedAt: string | null;
+}
+
+/** A commit linked to a card by a `#123` reference in its message. */
+export interface CommitLinkView {
+  sha: string;
+  shortSha: string;
+  url: string;
+  repository: string;
+  authorName: string;
+  message: string;
+  committedAt: string;
+  /** The card the link is on — for the project-wide recent list. */
+  cardNumber: number;
+}

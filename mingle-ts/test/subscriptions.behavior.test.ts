@@ -74,7 +74,7 @@ const { deliverHistoryNotifications } = await import(
 const { enqueueJob, recoverStaleJobs, runPendingJobs } = await import(
   "../app/jobs/queue.server"
 );
-const { HISTORY_NOTIFICATIONS_JOB } = await import("../app/domain/notifications.server");
+const { HISTORY_NOTIFICATIONS_JOB, INTEGRATION_DELIVERIES_JOB } = await import("../app/domain/notifications.server");
 const { historyCursor } = await import("../app/domain/history/read.server");
 
 type MailMessage = import("../app/mail/mailer.server").MailMessage;
@@ -332,11 +332,14 @@ describe("history-writing commands schedule delivery", () => {
       }),
       "update",
     );
-    const pending = pendingJobs();
-    expect(pending).toHaveLength(1);
-    expect(pending[0].type).toBe(HISTORY_NOTIFICATIONS_JOB);
-    expect(JSON.parse(pending[0].payload)).toEqual({ projectId });
-    expect(pending[0].dedupeKey).toBe(`${HISTORY_NOTIFICATIONS_JOB}:${projectId}`);
+    // Since Phase 32 the outbox call schedules the email job and the
+    // integration (Slack) job side by side, each collapsed per project.
+    const pending = pendingJobs().sort((a, b) => a.type.localeCompare(b.type));
+    expect(pending.map((j) => j.type)).toEqual([HISTORY_NOTIFICATIONS_JOB, INTEGRATION_DELIVERIES_JOB]);
+    for (const job of pending) {
+      expect(JSON.parse(job.payload)).toEqual({ projectId });
+      expect(job.dedupeKey).toBe(`${job.type}:${projectId}`);
+    }
   });
 
   it("every history-writing command schedules delivery", () => {
@@ -355,7 +358,7 @@ describe("history-writing commands schedule delivery", () => {
     for (const [name, run] of steps) {
       db.delete(jobs).run();
       mustOk(run() as CommandResult<unknown>, name);
-      expect(pendingJobs().map((j) => j.type), name).toEqual([HISTORY_NOTIFICATIONS_JOB]);
+      expect(pendingJobs().map((j) => j.type).sort(), name).toEqual([HISTORY_NOTIFICATIONS_JOB, INTEGRATION_DELIVERIES_JOB]);
     }
   });
 
@@ -745,15 +748,17 @@ describe("delivery", () => {
   it("end to end through the queue: a card change runs a real job that delivers the email", async () => {
     mustOk(subscribe(db, { projectId, filter: { kind: "project" }, actorUserId: devId }), "subscribe");
     const card = newCard("Queued");
-    const [job] = pendingJobs();
-    expect(job.type).toBe(HISTORY_NOTIFICATIONS_JOB);
+    const job = pendingJobs().find((j) => j.type === HISTORY_NOTIFICATIONS_JOB)!;
+    expect(job).toBeDefined();
 
     const { sent, mailer } = capturingMailer();
     const report = await runPendingJobs(db, {
       [HISTORY_NOTIFICATIONS_JOB]: (handle, payload) =>
         deliverHistoryNotifications(handle, mailer, { projectId: Number(payload.projectId) }).then(() => undefined),
+      // The integration job scheduled beside it is Phase 32's concern (test/integrations.behavior.test.ts).
+      [INTEGRATION_DELIVERIES_JOB]: async () => undefined,
     });
-    expect(report).toEqual({ ran: 1, succeeded: 1, retried: 0, failed: 0 });
+    expect(report).toEqual({ ran: 2, succeeded: 2, retried: 0, failed: 0 });
     expect(db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.status).toBe("done");
     expect(sent.map((m) => m.subject)).toEqual([`Card #${card.number} Queued created by BOSS`]);
   });
