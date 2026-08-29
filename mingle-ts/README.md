@@ -96,8 +96,14 @@ documents its resource.
 npm install
 npm run dev                      # http://localhost:5173, data in ./data/mingle.db
 npm run typecheck                # react-router typegen + tsc
-npx vitest run --exclude '**/*.real.test.ts'   # the behavioral suites (seconds)
+npm test                         # the behavioral suites (seconds)
+npm run verify                   # typecheck + behavioral suites + production build
 ```
+
+`npm run verify` is the standing end-of-phase gate. The build step matters:
+`tsc` and Vitest both resolve `.server.ts` modules freely, so a browser
+route that imports a server-only value passes both and fails only when
+the client bundle is built.
 
 The development stack with a local mail server (Mailpit at
 <http://localhost:8025>):

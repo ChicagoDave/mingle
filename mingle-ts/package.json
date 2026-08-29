@@ -7,6 +7,8 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
+    "test": "vitest run --exclude '**/*.real.test.ts'",
+    "verify": "npm run typecheck && npm test && npm run build",
     "test:realpath": "vitest run test/install.real.test.ts test/healthz.real.test.ts test/notifications.real.test.ts test/api-v1.real.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

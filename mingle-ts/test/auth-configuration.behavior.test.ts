@@ -76,7 +76,13 @@ describe("sealer", () => {
     expect(a.open(sealed)).toBe("hunter2");
     expect(createSealer("key-a").open(sealed)).toBe("hunter2");
     expect(() => createSealer("key-b").open(sealed)).toThrow();
-    expect(() => a.open(sealed.slice(0, -2) + "zz")).toThrow();
+    // Flip a decoded ciphertext byte rather than editing the base64url text:
+    // a trailing base64url character carries padding bits, so a textual edit
+    // there can decode to the same bytes and leave the value untampered.
+    const [scheme, version, iv, tag, body] = sealed.split(":");
+    const flipped = Buffer.from(body!, "base64url");
+    flipped[0]! ^= 0xff;
+    expect(() => a.open([scheme, version, iv, tag, flipped.toString("base64url")].join(":"))).toThrow();
     expect(() => a.open("plain")).toThrow();
     expect(() => createSealer("")).toThrow();
   });
