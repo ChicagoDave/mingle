@@ -1,0 +1,22 @@
+# Development override — adds Mailpit so history notifications (Phase 22)
+# are delivered over real SMTP to an inbox at http://localhost:8025, which
+# is what test/notifications.real.test.ts reads.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d
+#
+# A production install points SMTP_HOST at its own relay and never loads
+# this file.
+services:
+  app:
+    environment:
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM: mingle@localhost
+    depends_on:
+      - mailpit
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web UI + HTTP API

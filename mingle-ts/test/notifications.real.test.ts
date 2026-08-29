@@ -11,7 +11,7 @@
  * injection — the mailer is built from the same environment variables
  * the container reads.
  *
- * Precondition: Mailpit is reachable — `docker compose up -d mailpit`
+ * Precondition: Mailpit is reachable — `docker compose -f compose.yaml -f compose.dev.yaml up -d mailpit`
  * in mingle-ts/ (SMTP on 1025, API on 8025). MAILPIT_SMTP_HOST,
  * MAILPIT_SMTP_PORT and MAILPIT_API_URL override the defaults. Run via
  * `npm run test:realpath`.

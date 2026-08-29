@@ -1,39 +1,46 @@
-# mingle-ts stack (ADR-0002: one container, one SQLite volume).
+# Mingle — the one-command install (ADR-0002: one container, one SQLite volume).
 #
-# Usage:
-#   docker compose up          # app on http://localhost:3000, data in the
-#                              # mingle-data volume (/data/mingle.db);
-#                              # mail lands in Mailpit at http://localhost:8025
+#   docker compose up -d        # builds the image, starts Mingle on
+#                               # http://localhost:3000 (MINGLE_PORT to change),
+#                               # keeps its data in the mingle-data volume
 #
-# There is no database service — SQLite lives inside the app container on
-# a mounted volume. Backup = copy the volume's mingle.db file.
+# There is no database service: SQLite lives inside the app container at
+# /data/mingle.db on the mounted volume, and pending migrations are applied
+# every time the container starts, so upgrading is `docker compose up -d --build`.
 #
-# Mailpit is the development mail server: history notifications (Phase 22)
-# are delivered to it over real SMTP, and its inbox is what the real-path
-# test reads. A production install points SMTP_HOST at its own relay and
-# drops this service.
+# Backup = copy the database file out of the volume while the app is running
+# (SQLite in WAL mode stays consistent under a copy):
+#   docker compose cp app:/data/mingle.db ./mingle-backup.db
+# Restore = stop the app, copy it back, start the app:
+#   docker compose stop app && docker compose cp ./mingle-backup.db app:/data/mingle.db && docker compose start app
+# Attachments live beside it in /data/attachments — back up the whole volume
+# (`docker run --rm -v mingle-ts_mingle-data:/data -v "$PWD":/backup alpine tar czf /backup/mingle-data.tgz /data`)
+# to keep them too.
+#
+# Development stack with a local mail server: see compose.dev.yaml.
 services:
   app:
     build: .
+    init: true
+    restart: unless-stopped
     environment:
-      DATABASE_FILE: /data/mingle.db
-      PORT: "3000"
-      SITE_URL: http://localhost:3000
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      SMTP_FROM: mingle@localhost
+      # The absolute address people reach Mingle at — used in emails and
+      # chat notifications, and as the OIDC callback origin. Set it to the
+      # real hostname when the install is not on this machine.
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      # Session cookies are only sent over HTTPS unless this is "true". A
+      # plain-HTTP install on a LAN needs it; behind an HTTPS reverse proxy
+      # set INSECURE_COOKIES=false (or remove it) so cookies stay Secure.
+      INSECURE_COOKIES: ${INSECURE_COOKIES:-true}
+      # Outbound mail for history notifications; unset = notifications
+      # queue until an SMTP relay is configured (see compose.dev.yaml).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-mingle@localhost}
     ports:
-      - "3000:3000"
+      - "${MINGLE_PORT:-3000}:3000"
     volumes:
       - mingle-data:/data
-    depends_on:
-      - mailpit
-
-  mailpit:
-    image: axllent/mailpit:latest
-    ports:
-      - "1025:1025"   # SMTP
-      - "8025:8025"   # web UI + HTTP API
 
 volumes:
   mingle-data:
