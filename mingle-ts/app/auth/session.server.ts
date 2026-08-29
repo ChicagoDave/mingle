@@ -11,30 +11,12 @@
  * Owner context: infrastructure (HTTP session adapter) for Identity &
  * Access.
  *
- * Secret handling: SESSION_SECRET env wins; otherwise a secret is
- * generated once and persisted beside the database file, so a
- * self-hosted install keeps sessions across restarts with zero
- * configuration (ADR-0002's install story).
+ * Secret handling: the cookie is signed with the install's secret from
+ * app/auth/secret.server.ts (SESSION_SECRET env, else a file persisted
+ * beside the database — ADR-0002's zero-configuration install story).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
-import { dirname, resolve } from "node:path";
 import { createCookieSessionStorage, redirect } from "react-router";
-
-/**
- * Resolves the cookie-signing secret: env var, else a file persisted
- * next to the database (created on first boot, chmod 600).
- */
-function resolveSecret(): string {
-  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
-  const databaseFile = resolve(process.env.DATABASE_FILE ?? "data/mingle.db");
-  const secretFile = resolve(dirname(databaseFile), "session-secret");
-  if (!existsSync(secretFile)) {
-    mkdirSync(dirname(secretFile), { recursive: true });
-    writeFileSync(secretFile, randomBytes(32).toString("hex"), { mode: 0o600 });
-  }
-  return readFileSync(secretFile, "utf8").trim();
-}
+import { appSecret } from "~/auth/secret.server";
 
 const storage = createCookieSessionStorage({
   cookie: {
@@ -42,7 +24,7 @@ const storage = createCookieSessionStorage({
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    secrets: [resolveSecret()],
+    secrets: [appSecret()],
     // Secure cookies require HTTPS; self-hosted installs often start on
     // plain HTTP behind a LAN, so this follows the env explicitly.
     secure: process.env.NODE_ENV === "production" && process.env.INSECURE_COOKIES !== "true",

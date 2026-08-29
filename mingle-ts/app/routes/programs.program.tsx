@@ -19,7 +19,8 @@ import { requireUserId } from "~/auth/session.server";
 import { db } from "~/db/client.server";
 import { PrivilegeLevel, privilegeLevelForProgram } from "~/domain/identity/authorization.server";
 import { addProgramProject, removeProgramProject } from "~/domain/programs/commands.server";
-import { createObjective, TIMELINE_ROWS, VERTICALLY_MIDDLE_OF_TIMELINE } from "~/domain/programs/objectives.server";
+import { createObjective } from "~/domain/programs/objectives.server";
+import { TIMELINE_ROWS, VERTICALLY_MIDDLE_OF_TIMELINE } from "~/shared/wire-types";
 import { updatePlan } from "~/domain/programs/plan.server";
 import { addableProjects, findProgramByIdentifier, programOverview } from "~/domain/programs/read.server";
 

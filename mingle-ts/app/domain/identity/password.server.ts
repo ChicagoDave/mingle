@@ -6,7 +6,8 @@
  * user.rb's sha_password) with a modern KDF instead of its 2007-era
  * salted SHA.
  *
- * Public interface: `hashPassword`, `verifyPassword`. The stored format
+ * Public interface: `hashPassword`, `verifyPassword`,
+ * `unusablePasswordHash`. The stored format
  * is self-describing (`scrypt:N:r:p:<salt-hex>:<hash-hex>`) so cost
  * parameters can be raised later without invalidating existing hashes.
  *
@@ -37,6 +38,16 @@ export function hashPassword(password: string): string {
     p: SCRYPT_P,
   });
   return `scrypt:${SCRYPT_N}:${SCRYPT_R}:${SCRYPT_P}:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+/**
+ * The stored value for an account that has no Mingle password — one
+ * enrolled through LDAP or an OIDC provider (Phase 31). It is not in
+ * the scrypt format, so `verifyPassword` fails closed on it for every
+ * candidate; such users sign in only through their external source.
+ */
+export function unusablePasswordHash(): string {
+  return "external:no-password";
 }
 
 /**

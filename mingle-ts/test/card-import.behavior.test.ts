@@ -42,7 +42,8 @@ const { createProject } = await import("../app/domain/projects/commands.server")
 const { createCard, defineCardType, deleteCard } = await import("../app/domain/cards/commands.server");
 const { definePropertyDefinition, setCardPropertyValue } = await import("../app/domain/cards/properties.server");
 const { parseDelimited } = await import("../app/domain/import-export/delimited.server");
-const { formatColumnTarget, importCards, parseColumnTarget, previewCardImport, suggestMappings } = await import(
+const { formatColumnTarget, parseColumnTarget } = await import("../app/shared/wire-types");
+const { importCards, previewCardImport, suggestMappings } = await import(
   "../app/domain/import-export/card-import.server"
 );
 

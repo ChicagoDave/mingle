@@ -53,7 +53,7 @@ import {
   shiftGroupDown,
   squish,
 } from "~/domain/programs/objective-support.server";
-import { TIMELINE_ROWS, VERTICALLY_MIDDLE_OF_TIMELINE } from "~/domain/programs/objectives.server";
+import { TIMELINE_ROWS, VERTICALLY_MIDDLE_OF_TIMELINE } from "~/shared/wire-types";
 import { widenPlanToFit, type PlanWindow } from "~/domain/programs/plan.server";
 
 /** The program's backlog rows in position order. */

@@ -127,6 +127,20 @@
       "when": 1787903793143,
       "tag": "0017_programs",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787964335622,
+      "tag": "0018_api_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1787965514119,
+      "tag": "0019_external_auth",
+      "breakpoints": true
     }
   ]
 }

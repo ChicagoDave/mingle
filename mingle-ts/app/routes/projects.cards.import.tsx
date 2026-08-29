@@ -19,13 +19,11 @@ import { requireUserId } from "~/auth/session.server";
 import { db } from "~/db/client.server";
 import { PrivilegeLevel, privilegeLevelFor } from "~/domain/identity/authorization.server";
 import {
-  formatColumnTarget,
   importCards,
-  parseColumnTarget,
   previewCardImport,
   settableProperties,
-  type ColumnTarget,
 } from "~/domain/import-export/card-import.server";
+import { formatColumnTarget, parseColumnTarget, type ColumnTarget } from "~/shared/wire-types";
 import { findProjectByIdentifier } from "~/domain/import-export/lookup.server";
 
 /** Loads the project, the properties a column may target, and whether the viewer may import. */

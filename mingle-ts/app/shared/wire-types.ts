@@ -391,3 +391,236 @@ export const OBJECTIVE_STATUSES = ["PLANNED", "BACKLOG"] as const;
 
 /** One of OBJECTIVE_STATUSES. */
 export type ObjectiveStatus = (typeof OBJECTIVE_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
+// Public API v1 (Phase 30) — the JSON resources and request bodies served
+// under /api/v1. External clients consume these shapes; the route modules
+// and the api adapter (app/api/*) produce them. Dates are ISO-8601 strings.
+// ---------------------------------------------------------------------------
+
+/** Every non-2xx API response body. `errors` carries command rejections. */
+export interface ApiErrorBody {
+  error: string;
+  errors?: FieldErrors;
+}
+
+/** A project as the API presents it (`/api/v1/projects/:identifier`). */
+export interface ApiProject {
+  identifier: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** POST /api/v1/projects. */
+export interface ApiCreateProjectBody {
+  name: string;
+  /** Generated from the name when omitted. */
+  identifier?: string | null;
+  description?: string | null;
+}
+
+/** A card type as the API presents it. */
+export interface ApiCardType {
+  id: number;
+  name: string;
+  position: number;
+}
+
+/** A property definition as the API presents it. */
+export interface ApiPropertyDefinition {
+  id: number;
+  name: string;
+  kind: PropertyKind;
+  /** The allowed values in order — enumerated kind only. */
+  values?: string[];
+  /** The expression — formula kind only. */
+  formula?: string | null;
+  transitionOnly: boolean;
+  position: number;
+}
+
+/** POST /api/v1/projects/:identifier/property_definitions. */
+export interface ApiDefinePropertyDefinitionBody {
+  name: string;
+  kind: string;
+  values?: string[];
+  formula?: string | null;
+  nullIsZero?: boolean;
+  transitionOnly?: boolean;
+}
+
+/**
+ * A card as the API presents it. `properties` is keyed by property
+ * name and lists every definition of the project — null when unset.
+ * User properties carry the user's login, not the internal id.
+ */
+export interface ApiCard {
+  number: number;
+  name: string;
+  description: string | null;
+  type: string;
+  version: number;
+  properties: Record<string, string | null>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * POST /api/v1/projects/:identifier/cards. `type` defaults to the
+ * project's first card type; `properties` are set by name in the same
+ * transaction — any invalid one and no card is created.
+ */
+export interface ApiCreateCardBody {
+  name: string;
+  description?: string | null;
+  type?: string | null;
+  properties?: Record<string, string | null>;
+}
+
+/**
+ * PATCH /api/v1/projects/:identifier/cards/:number. Only the fields
+ * present change. A transition-only property changes by executing the
+ * transition that produces the value (ADR-0008), exactly as the card
+ * page does; the transitions applied that way are reported back.
+ */
+export interface ApiUpdateCardBody {
+  name?: string;
+  description?: string | null;
+  type?: string | null;
+  properties?: Record<string, string | null>;
+}
+
+/** What a card write reports: the card, plus any transitions applied by property changes. */
+export interface ApiCardWrite {
+  card: ApiCard;
+  appliedTransitions: string[];
+}
+
+/** A transition definition as the API presents it. */
+export interface ApiTransition {
+  id: number;
+  name: string;
+  /** The card type it is restricted to; null for any. */
+  cardType: string | null;
+  /** Legacy one-line descriptions ("Has value of Open for Status"). */
+  prerequisites: string[];
+  /** Legacy one-line descriptions ("Sets Status to Closed"). */
+  actions: string[];
+}
+
+/** A transition the caller may execute on a card right now, with the inputs it needs. */
+export interface ApiAvailableTransition {
+  id: number;
+  name: string;
+  inputs: { property: string; kind: PropertyKind; required: boolean }[];
+}
+
+/**
+ * POST /api/v1/projects/:identifier/cards/:number/transitions.
+ * `transition` names a transition by id or (case-insensitively) by name;
+ * `userInput` supplies user-entered action values keyed by property name.
+ */
+export interface ApiExecuteTransitionBody {
+  transition: number | string;
+  userInput?: Record<string, string | null>;
+}
+
+/** What executing a transition reports. */
+export interface ApiTransitionExecution {
+  card: ApiCard;
+  transition: string;
+  changedProperties: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Program timeline (Phase 26) — legacy Plan::Constants. Crosses the wire
+// in the objective forms' row selectors, so both sides import it here.
+// ---------------------------------------------------------------------------
+
+/** Rows on the plan timeline. */
+export const TIMELINE_ROWS = 14;
+/** The row a new objective lands on. */
+export const VERTICALLY_MIDDLE_OF_TIMELINE = 6;
+
+// ---------------------------------------------------------------------------
+// Card import column mapping (Phase 29) — the form encoding the mapping
+// preview posts back. Pure string parsing; both sides import it here.
+// ---------------------------------------------------------------------------
+
+/** What an imported column maps to. */
+export type ColumnTarget =
+  | { kind: "number" | "name" | "description" | "type" | "ignore" }
+  | { kind: "property"; propertyDefinitionId: number };
+
+/** Parses the form encoding of a target: `number|name|description|type|ignore|property:<id>`. */
+export function parseColumnTarget(text: string): ColumnTarget | null {
+  const value = text.trim();
+  if (value === "number" || value === "name" || value === "description" || value === "type" || value === "ignore")
+    return { kind: value };
+  const match = /^property:(\d+)$/.exec(value);
+  return match ? { kind: "property", propertyDefinitionId: Number(match[1]) } : null;
+}
+
+/** The form encoding of a target (inverse of `parseColumnTarget`). */
+export function formatColumnTarget(target: ColumnTarget): string {
+  return target.kind === "property" ? `property:${target.propertyDefinitionId}` : target.kind;
+}
+
+// ---------------------------------------------------------------------------
+// Authentication configuration (Phase 31) — what the site admin's
+// authentication page shows and posts. Secrets never cross the wire
+// outbound: the views only say whether one is set.
+// ---------------------------------------------------------------------------
+
+/** External authentication sources a site can enable. */
+export const AUTH_SOURCE_KINDS = ["ldap", "oidc"] as const;
+
+/** One of `AUTH_SOURCE_KINDS`. */
+export type AuthSourceKind = (typeof AUTH_SOURCE_KINDS)[number];
+
+/** LDAP settings as the admin page shows them (legacy ldap_settings, renamed). */
+export interface LdapSettingsView {
+  enabled: boolean;
+  /** ldap:// or ldaps:// URL of the directory. */
+  url: string;
+  /** Service account for the user search; blank for anonymous search. */
+  bindDn: string;
+  bindPasswordSet: boolean;
+  baseDn: string;
+  /** Attribute holding the Mingle login (legacy ldapfilter: uid, sAMAccountName). */
+  loginAttribute: string;
+  /** Object class of user entries (legacy ldapobjectclass). */
+  objectClass: string;
+  /** Attribute mapped to the display name (legacy ldap_map_fullname). */
+  nameAttribute: string;
+  /** Attribute mapped to the email (legacy ldap_map_mail). */
+  mailAttribute: string;
+  /** Optional group the user must belong to (legacy ldapgroupdn / objectclass / attribute). */
+  groupDn: string;
+  groupObjectClass: string;
+  groupAttribute: string;
+  /** Create Mingle accounts on first successful sign-in (legacy auto_enroll). */
+  autoEnroll: boolean;
+}
+
+/** OIDC settings as the admin page shows them. */
+export interface OidcSettingsView {
+  enabled: boolean;
+  /** Button label on the sign-in page. */
+  displayName: string;
+  /** Issuer URL; discovery is fetched from `<issuer>/.well-known/openid-configuration`. */
+  issuer: string;
+  clientId: string;
+  clientSecretSet: boolean;
+  /** Space-separated scopes; must include openid. */
+  scopes: string;
+  autoEnroll: boolean;
+}
+
+/** The whole authentication page. */
+export interface AuthenticationView {
+  ldap: LdapSettingsView;
+  oidc: OidcSettingsView;
+}

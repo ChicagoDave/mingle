@@ -24,8 +24,7 @@
  *   ImportCards → CardsImported (the cards' own CardCreated/CardUpdated
  *   events are appended by the commands this runs)
  *
- * Public interface: `ColumnTarget`, `parseColumnTarget`,
- * `formatColumnTarget`, `settableProperties`, `suggestMappings`,
+ * Public interface: `settableProperties`, `suggestMappings`,
  * `previewCardImport`, `importCards`.
  *
  * Owner context: Import/Export (depends inward on Card Management).
@@ -47,26 +46,7 @@ import { type CommandResult, reject } from "~/domain/command.server";
 import { emitEvent } from "~/domain/events.server";
 import { authorizeProjectAction, privilegeLevelFor, PrivilegeLevel } from "~/domain/identity/authorization.server";
 import { parseDelimited, type DelimitedTable } from "~/domain/import-export/delimited.server";
-import type { FieldErrors, PropertyKind } from "~/shared/wire-types";
-
-/** What a column imports as. */
-export type ColumnTarget =
-  | { kind: "number" | "name" | "description" | "type" | "ignore" }
-  | { kind: "property"; propertyDefinitionId: number };
-
-/** Parses the form encoding of a target: `number|name|description|type|ignore|property:<id>`. */
-export function parseColumnTarget(text: string): ColumnTarget | null {
-  const value = text.trim();
-  if (value === "number" || value === "name" || value === "description" || value === "type" || value === "ignore")
-    return { kind: value };
-  const match = /^property:(\d+)$/.exec(value);
-  return match ? { kind: "property", propertyDefinitionId: Number(match[1]) } : null;
-}
-
-/** The form encoding of a target (inverse of `parseColumnTarget`). */
-export function formatColumnTarget(target: ColumnTarget): string {
-  return target.kind === "property" ? `property:${target.propertyDefinitionId}` : target.kind;
-}
+import { type ColumnTarget, type FieldErrors, type PropertyKind } from "~/shared/wire-types";
 
 /** Legacy `MISSING`: a cell holding just a dash is "no value for this cell". */
 const MISSING = "-";

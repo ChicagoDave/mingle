@@ -14,6 +14,9 @@ export default [
   route("login", "routes/login.tsx"),
   route("logout", "routes/logout.ts"),
   route("profile", "routes/profile.tsx"),
+  route("auth/oidc", "routes/auth.oidc.ts"),
+  route("auth/oidc/callback", "routes/auth.oidc.callback.ts"),
+  route("admin/authentication", "routes/admin.authentication.tsx"),
   route("projects", "routes/projects.tsx"),
   route("projects/new", "routes/projects.new.tsx"),
   route("projects/import", "routes/projects.import.tsx"),
@@ -66,5 +69,21 @@ export default [
   route(
     "projects/:identifier/cards/:number/attachments/:attachmentId",
     "routes/projects.cards.attachment.ts",
+  ),
+  // Public API v1 (Phase 30) — JSON resource routes, bearer-key
+  // authenticated, reusing the UI's command handlers.
+  route("api/v1/projects", "routes/api.v1.projects.ts"),
+  route("api/v1/projects/:identifier", "routes/api.v1.projects.project.ts"),
+  route("api/v1/projects/:identifier/card_types", "routes/api.v1.projects.card-types.ts"),
+  route(
+    "api/v1/projects/:identifier/property_definitions",
+    "routes/api.v1.projects.property-definitions.ts",
+  ),
+  route("api/v1/projects/:identifier/transitions", "routes/api.v1.projects.transitions.ts"),
+  route("api/v1/projects/:identifier/cards", "routes/api.v1.projects.cards.ts"),
+  route("api/v1/projects/:identifier/cards/:number", "routes/api.v1.projects.cards.card.ts"),
+  route(
+    "api/v1/projects/:identifier/cards/:number/transitions",
+    "routes/api.v1.projects.cards.card.transitions.ts",
   ),
 ] satisfies RouteConfig;

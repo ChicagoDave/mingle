@@ -18,7 +18,8 @@ import { requireUserId } from "~/auth/session.server";
 import { db } from "~/db/client.server";
 import { PrivilegeLevel, privilegeLevelForProgram } from "~/domain/identity/authorization.server";
 import { planBacklogObjective, updateBacklogObjective } from "~/domain/programs/backlog.server";
-import { deleteObjective, TIMELINE_ROWS, updateObjective } from "~/domain/programs/objectives.server";
+import { deleteObjective, updateObjective } from "~/domain/programs/objectives.server";
+import { TIMELINE_ROWS } from "~/shared/wire-types";
 import { findObjectiveByNumber, findProgramByIdentifier, objectiveHistory } from "~/domain/programs/read.server";
 
 /** Optional integer form field: blank → null, else Number (NaN when malformed, rejected downstream). */

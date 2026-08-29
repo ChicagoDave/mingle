@@ -30,7 +30,8 @@
  *
  * Public interface: `createObjective`, `updateObjective`,
  * `deleteObjective`, `eraseProgramObjectives` (for DeleteProgram),
- * `TIMELINE_ROWS`, `VERTICALLY_MIDDLE_OF_TIMELINE`.
+ * (`TIMELINE_ROWS` and `VERTICALLY_MIDDLE_OF_TIMELINE` live in
+ * ~/shared/wire-types — the forms' row selectors need them too.)
  *
  * Owner context: Program Management. Handlers take the Drizzle handle
  * as a parameter — no module-level infrastructure imports.
@@ -55,11 +56,8 @@ import {
   squish,
 } from "~/domain/programs/objective-support.server";
 import { widenPlanToFit, type PlanWindow } from "~/domain/programs/plan.server";
-import type { ObjectiveStatus } from "~/shared/wire-types";
+import { TIMELINE_ROWS, VERTICALLY_MIDDLE_OF_TIMELINE, type ObjectiveStatus } from "~/shared/wire-types";
 
-/** Legacy Plan::Constants — rows on the timeline and the one a new objective lands on. */
-export const TIMELINE_ROWS = 14;
-export const VERTICALLY_MIDDLE_OF_TIMELINE = 6;
 /** The fields a member supplies for a planned objective. */
 interface ObjectiveFields {
   name: string;

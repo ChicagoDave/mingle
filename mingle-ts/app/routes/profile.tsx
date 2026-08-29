@@ -1,9 +1,12 @@
 /**
- * /profile — profile settings (display name, email, password change).
+ * /profile — profile settings (display name, email, password change,
+ * API keys).
  *
- * Purpose: the Phase 2 profile route. Two forms post to one action,
+ * Purpose: the Phase 2 profile route. Its forms post to one action,
  * discriminated by the `intent` field: "profile" runs UpdateUserProfile,
- * "password" runs ChangePassword. Requires a logged-in session.
+ * "password" runs ChangePassword, "generate-api-key" runs
+ * GenerateApiKey (Phase 30 — the key is shown once), "revoke-api-key"
+ * runs RevokeApiKey. Requires a logged-in session.
  *
  * Public interface: `loader`, `action`, default component.
  *
@@ -19,6 +22,12 @@ import {
   changePassword,
   updateUserProfile,
 } from "~/domain/identity/commands.server";
+import {
+  generateApiKey,
+  listApiKeys,
+  revokeApiKey,
+} from "~/domain/identity/api-keys.server";
+import { sealer } from "~/auth/sealer.server";
 import { requireUserId } from "~/auth/session.server";
 
 /** Loads the logged-in user's editable profile fields. */
@@ -31,12 +40,19 @@ export async function loader({ request }: Route.LoaderArgs) {
     name: user.name,
     email: user.email,
     admin: user.admin,
+    apiKeys: listApiKeys(db, userId).map((key) => ({
+      id: key.id,
+      keyPrefix: key.keyPrefix,
+      createdAt: key.createdAt.toISOString(),
+      lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
+    })),
   };
 }
 
 /**
- * Dispatches the posted form by `intent` to UpdateUserProfile or
- * ChangePassword; returns field errors, or a saved flag on success.
+ * Dispatches the posted form by `intent` to UpdateUserProfile,
+ * ChangePassword, GenerateApiKey, or RevokeApiKey; returns field
+ * errors, or a saved flag (plus the one-time key when generated).
  */
 export async function action({ request }: Route.ActionArgs) {
   const userId = await requireUserId(request);
@@ -63,6 +79,21 @@ export async function action({ request }: Route.ActionArgs) {
       ? { saved: "password" as const }
       : { errors: result.errors satisfies FieldErrors };
   }
+  if (intent === "generate-api-key") {
+    const result = generateApiKey(db, sealer, { userId, actorUserId: userId });
+    return result.ok
+      ? { saved: "api-key" as const, generatedKey: result.value.key, generatedSigningSecret: result.value.signingSecret }
+      : { errors: result.errors satisfies FieldErrors };
+  }
+  if (intent === "revoke-api-key") {
+    const result = revokeApiKey(db, {
+      apiKeyId: Number(form.get("apiKeyId") ?? 0),
+      actorUserId: userId,
+    });
+    return result.ok
+      ? { saved: "api-key-revoked" as const }
+      : { errors: result.errors satisfies FieldErrors };
+  }
   throw new Response("Unknown intent", { status: 400 });
 }
 
@@ -73,12 +104,21 @@ export default function Profile() {
   const errors: FieldErrors =
     (actionData && "errors" in actionData ? actionData.errors : undefined) ?? {};
   const saved = actionData && "saved" in actionData ? actionData.saved : null;
+  const generatedKey =
+    actionData && "generatedKey" in actionData ? actionData.generatedKey : null;
+  const generatedSigningSecret =
+    actionData && "generatedSigningSecret" in actionData ? actionData.generatedSigningSecret : null;
 
   return (
     <main style={{ maxWidth: 480, margin: "4rem auto", fontFamily: "sans-serif" }}>
       <h1>
         {user.name} <small>({user.login}{user.admin ? ", administrator" : ""})</small>
       </h1>
+      {user.admin ? (
+        <p>
+          <a href="/admin/authentication">Authentication settings</a>
+        </p>
+      ) : null}
       {saved ? <p style={{ color: "seagreen" }}>Saved.</p> : null}
 
       <h2>Profile</h2>
@@ -123,6 +163,48 @@ export default function Profile() {
           <ErrorLines field="newPassword" errors={errors} />
         </p>
         <button type="submit">Change password</button>
+      </Form>
+
+      <h2>API keys</h2>
+      <p>
+        <small>
+          An API key authenticates requests to <code>/api/v1</code> as you, sent as{" "}
+          <code>Authorization: Bearer &lt;key&gt;</code>. A key is shown once, when generated.
+        </small>
+      </p>
+      {generatedKey ? (
+        <p style={{ background: "#fff8dc", padding: "0.5rem" }}>
+          Your new API key — copy it now, it will not be shown again:
+          <br />
+          <code data-testid="generated-api-key">{generatedKey}</code>
+          <br />
+          Its signing secret, for <code>Authorization: Mingle-HMAC-SHA256 {user.login}:&lt;signature&gt;</code>{" "}
+          requests:
+          <br />
+          <code data-testid="generated-signing-secret">{generatedSigningSecret}</code>
+        </p>
+      ) : null}
+      <ErrorLines field="apiKey" errors={errors} />
+      {user.apiKeys.length === 0 ? (
+        <p>You have no API keys.</p>
+      ) : (
+        <ul>
+          {user.apiKeys.map((key) => (
+            <li key={key.id}>
+              <code>{key.keyPrefix}…</code> created {key.createdAt.slice(0, 10)}
+              {key.lastUsedAt ? `, last used ${key.lastUsedAt.slice(0, 10)}` : ", never used"}{" "}
+              <Form method="post" style={{ display: "inline" }}>
+                <input type="hidden" name="intent" value="revoke-api-key" />
+                <input type="hidden" name="apiKeyId" value={key.id} />
+                <button type="submit">Revoke</button>
+              </Form>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Form method="post">
+        <input type="hidden" name="intent" value="generate-api-key" />
+        <button type="submit">Generate API key</button>
       </Form>
 
       <Form method="post" action="/logout">
