@@ -56,7 +56,7 @@ export default function Login() {
       <Form method="post">
         <p>
           <label>
-            Sign-in name
+            Sign-in name or email
             <br />
             <input name="login" />
           </label>

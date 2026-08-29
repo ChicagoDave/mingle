@@ -16,12 +16,11 @@
  *
  * Owner context: Identity & Access.
  */
-import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { users, type UserRow } from "~/db/schema/identity";
+import type { UserRow } from "~/db/schema/identity";
 import { type CommandResult, reject } from "~/domain/command.server";
 import type { LdapSettings } from "~/domain/identity/auth-configuration.server";
-import { authenticateUser } from "~/domain/identity/commands.server";
+import { authenticateUser, findUserByLoginOrEmail } from "~/domain/identity/commands.server";
 import { authenticateViaLdap, type LdapDirectoryFactory } from "~/domain/identity/ldap-strategy.server";
 
 /** A login+password authority. */
@@ -40,11 +39,7 @@ export function passwordStrategy(db: BetterSQLite3Database, options: { adminsOnl
     kind: "password",
     async authenticate(credentials) {
       if (options.adminsOnly) {
-        const user = db
-          .select({ admin: users.admin })
-          .from(users)
-          .where(eq(users.login, credentials.login.trim().toLowerCase()))
-          .get();
+        const user = findUserByLoginOrEmail(db, credentials.login);
         if (!user?.admin) return reject("login", "Invalid login or password");
       }
       return authenticateUser(db, credentials);

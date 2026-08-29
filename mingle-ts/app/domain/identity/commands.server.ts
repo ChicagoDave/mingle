@@ -64,6 +64,31 @@ function findByLogin(
     .get();
 }
 
+/**
+ * Resolves what a person typed into the sign-in form to a user: the
+ * login first, and only when no login matches, the email address
+ * (case-insensitively). Legacy's `MingleDBAuthentication` did exactly
+ * this, which is why its form was labelled "Sign-in name or email";
+ * the order matters because a login may legally contain `@`.
+ *
+ * @param db - the Drizzle handle
+ * @param loginOrEmail - the sign-in form's first field, untrimmed
+ * @returns the user, or undefined when neither login nor email matches
+ */
+export function findUserByLoginOrEmail(
+  db: BetterSQLite3Database,
+  loginOrEmail: string,
+): UserRow | undefined {
+  const typed = loginOrEmail.trim();
+  const byLogin = findByLogin(db, typed);
+  if (byLogin) return byLogin;
+  return db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = ${typed.toLowerCase()}`)
+    .get();
+}
+
 export interface RegisterUserInput {
   login: string;
   name: string;
@@ -154,7 +179,7 @@ export function authenticateUser(
   const invalid = () =>
     reject<UserRow>("login", "Invalid login or password");
 
-  const user = findByLogin(db, input.login);
+  const user = findUserByLoginOrEmail(db, input.login);
   if (!user) return invalid();
   if (!verifyPassword(input.password, user.passwordHash)) return invalid();
   if (!user.activated) return invalid();

@@ -261,6 +261,20 @@ describe("credential strategies", () => {
     if (!allRefused.ok) expect(allRefused.errors.login).toEqual(["primary said no"]); // the primary's answer is shown
     expect((await authenticateCredentials([], { login: "dev", password: "x" })).ok).toBe(false);
   });
+
+  it("the adminsOnly password strategy resolves the admin by email too, and still refuses a non-admin by email", async () => {
+    const rootId = mustOk(registerUser(db, { login: "root", name: "Root", email: "Root@Example.com", password: "auth-config-1!" }), "root").id;
+    db.update(users).set({ admin: true }).where(eq(users.id, rootId)).run();
+    mustOk(registerUser(db, { login: "plain", name: "Plain", email: "plain@example.com", password: "auth-config-1!" }), "plain");
+    const adminsOnly = passwordStrategy(db, { adminsOnly: true });
+    const byEmail = await adminsOnly.authenticate({ login: "root@example.com", password: "auth-config-1!" });
+    expect(byEmail.ok).toBe(true);
+    if (byEmail.ok) expect(byEmail.value.id).toBe(rootId);
+    expect(db.select().from(users).where(eq(users.id, rootId)).get()!.lastLoginAt).toBeInstanceOf(Date);
+    const nonAdmin = await adminsOnly.authenticate({ login: "plain@example.com", password: "auth-config-1!" });
+    expect(nonAdmin.ok).toBe(false);
+    if (!nonAdmin.ok) expect(nonAdmin.errors.login).toEqual(["Invalid login or password"]);
+  });
 });
 
 // ---------------------------------------------------- admin route

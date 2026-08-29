@@ -1,13 +1,20 @@
-import type { Route } from "./+types/home";
-import { Welcome } from "../welcome/welcome";
+/**
+ * Root route — sends `/` to the projects list.
+ *
+ * Purpose: legacy Mingle's root (`map.root` → `projects#index`) was the
+ * projects list, which bounces anonymous visitors to sign-in; this route
+ * reproduces that by redirecting to `/projects`, whose loader enforces
+ * the login. Nothing renders here.
+ * Public interface: the `loader` (always redirects).
+ * Owner context: application shell.
+ */
+import { redirect } from "react-router";
 
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
-  ];
-}
-
-export default function Home() {
-  return <Welcome />;
+/**
+ * Redirects every request for `/` to `/projects`.
+ *
+ * @returns never — always throws a 302 redirect to `/projects`
+ */
+export function loader() {
+  throw redirect("/projects");
 }

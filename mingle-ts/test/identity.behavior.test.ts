@@ -184,6 +184,36 @@ describe("LogInUser", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors.login).toEqual(["Invalid login or password"]);
   });
+
+  it("signs in by email address, case-insensitively, stamping last_login_at on that user (legacy 'Sign-in name or email')", () => {
+    const result = authenticateUser(db, { login: "  DAVE@Example.COM ", password: VALID.password });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.login).toBe("dave.c");
+    expect(reloadByLogin("dave.c")!.lastLoginAt).toBeInstanceOf(Date);
+    expect(eventsOfType("UserLoggedIn")).toHaveLength(1);
+  });
+
+  it("resolves a login before an email when one user's login equals another's email", () => {
+    // "dave@example.com" is a legal login (LOGIN_FORMAT allows '@') and is also VALID's email.
+    registerUser(db, { login: "dave@example.com", name: "Imposter", email: null, password: "other-pass-9!" });
+    const asLogin = authenticateUser(db, { login: "dave@example.com", password: "other-pass-9!" });
+    expect(asLogin.ok).toBe(true);
+    if (asLogin.ok) expect(asLogin.value.login).toBe("dave@example.com");
+    expect(reloadByLogin("dave@example.com")!.lastLoginAt).toBeInstanceOf(Date);
+    expect(reloadByLogin("dave.c")!.lastLoginAt).toBeNull();
+    // VALID's own password against that value is judged against the login-matched user, so it fails.
+    const crossed = authenticateUser(db, { login: "dave@example.com", password: VALID.password });
+    expect(crossed.ok).toBe(false);
+    expect(reloadByLogin("dave.c")!.lastLoginAt).toBeNull();
+  });
+
+  it("rejects an email that matches no user with the generic message and no state change", () => {
+    const result = authenticateUser(db, { login: "nobody@example.com", password: VALID.password });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.login).toEqual(["Invalid login or password"]);
+    expect(reloadByLogin("dave.c")!.lastLoginAt).toBeNull();
+    expect(eventsOfType("UserLoggedIn")).toHaveLength(0);
+  });
 });
 
 describe("UpdateUserProfile", () => {
